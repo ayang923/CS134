@@ -1,6 +1,6 @@
-"""Launch the 134 HEBI demo
+"""Launch the Goals2 demo
 
-This instantiates the HEBI node and runs the simple 134 demo node.
+This instantiates the HEBI node and runs the Goals2 trajectory.
 
 """
 
@@ -27,10 +27,10 @@ def generate_launch_description():
                       {'joints': ['one', 'two', 'three']}])
 
     # Configure a node for the simple demo.
-    node_demo = Node(
-        name       = 'demo', 
+    node_goals2 = Node(
+        name       = 'goals', 
         package    = 'demo134',
-        executable = 'demo134',
+        executable = 'goals2',
         output     = 'screen')
 
 
@@ -42,5 +42,5 @@ def generate_launch_description():
 
         # Start the hebi and demo nodes.
         node_hebi,
-        node_demo,
+        node_goals2,
     ])

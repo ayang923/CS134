@@ -23,6 +23,7 @@ setup(
     entry_points={
         'console_scripts': [
             'demo134 = demo134.demo134:main',
+            'goals2 = demo134.goals2:main',
         ],
     },
 )

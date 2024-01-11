@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 #
-#   demo134.py
+#   goals2.py
 #
-#   Demonstration node to interact with the HEBIs.
+#   goals2 Node and trajectory
 #
 import numpy as np
 import rclpy
 
 from rclpy.node         import Node
 from sensor_msgs.msg    import JointState
+
+from demo134.trajutils import goto
 
 
 #
@@ -18,17 +20,20 @@ RATE = 100.0            # Hertz
 
 
 #
-#   DEMO Node Class
+#   Trajectory Node Class
 #
-class DemoNode(Node):
+class TrajectoryNode(Node):
     # Initialization.
-    def __init__(self, name):
+    def __init__(self, name, Trajectory):
         # Initialize the node, naming it as specified
-        super().__init__(name)
+        super().__init__(name)        
 
         # Create a temporary subscriber to grab the initial position.
         self.position0 = self.grabfbk()
         self.get_logger().info("Initial positions: %r" % self.position0)
+        
+        self.trajectory = Trajectory(self, self.position0)
+        self.jointnames = self.trajectory.jointnames()
 
         # Create a message and publisher to send the joint commands.
         self.cmdmsg = JointState()
@@ -55,9 +60,9 @@ class DemoNode(Node):
     # Shutdown
     def shutdown(self):
         # No particular cleanup, just shut down the node.
+        self.timer.destroy()
         self.destroy_node()
-
-
+        
     # Grab a single feedback - do not call this repeatedly.
     def grabfbk(self):
         # Create a temporary handler to grab the position.
@@ -75,13 +80,38 @@ class DemoNode(Node):
         # Return the values.
         return self.grabpos
 
-
     # Receive feedback - called repeatedly by incoming messages.
     def recvfbk(self, fbkmsg):
         # Just print the position (for now).
         # print(list(fbkmsg.position))
         pass
-
+        
+    def update(self):
+        self.t = 1e-9 * self.get_clock().now().nanoseconds - self.start_time
+        
+         # Compute the desired joint positions and velocities for this time.
+        desired = self.trajectory.evaluate(self.t)
+        if desired is None:
+            self.future.set_result("Trajectory has ended")
+            return
+        (q, qdot) = desired
+        
+        # Check the results.
+        if not (isinstance(q, list) and isinstance(qdot, list)):
+            self.get_logger().warn("(q) and (qdot) must be python lists!")
+            return
+        if not (len(q) == len(self.jointnames)):
+            self.get_logger().warn("(q) must be same length as jointnames!")
+            return
+        if not (len(q) == len(self.jointnames)):
+            self.get_logger().warn("(qdot) must be same length as (q)!")
+            return
+        if not (isinstance(q[0], float) and isinstance(qdot[0], float)):
+            self.get_logger().warn("Flatten NumPy arrays before making lists!")
+            return
+            
+        return (q, qdot)
+    
     def get_position(self):
     	t = 1e-9 * self.get_clock().now().nanoseconds - self.start_time
     	return [self.position0[0], self.position0[1], self.position0[2]]
@@ -90,12 +120,41 @@ class DemoNode(Node):
     # Send a command - called repeatedly by the timer.
     def sendcmd(self):
         # Build up the message and publish.
+        (q, qdot) = self.update()
         self.cmdmsg.header.stamp = self.get_clock().now().to_msg()
         self.cmdmsg.name         = ['one', 'two', 'three']
-        self.cmdmsg.position     = self.get_position()
-        self.cmdmsg.velocity     = []
+        self.cmdmsg.position     = q
+        self.cmdmsg.velocity     = qdot
         self.cmdmsg.effort       = [0.0, 0.0, 0.0]
         self.cmdpub.publish(self.cmdmsg)
+
+#
+#   Trajectory Class
+#
+class Trajectory():
+    # Initialization.
+    def __init__(self, node, q0):
+        # Define the joint position for middle of wave.
+        self.q0 = np.array(q0).reshape(-1,1)
+        self.q1 = np.array([0.0, 0.0, 0.378]).reshape(-1,1)
+
+    # Declare the joint names.
+    def jointnames(self):
+        # Return a list of joint names
+        return ['one', 'two', 'three']
+
+    # Evaluate at the given time.
+    def evaluate(self, t):
+        if (t > 12.0): return None
+
+        # Compute the joint values.
+        if   (t < 3.0): (q, qdot) = goto(t    , 3.0, self.q0, self.q1)
+        else:           (q, qdot) = (np.array([self.q1[0], np.sin(t-3.0) / 4 + self.q1[1], np.sin(t-3.0) / 4 + self.q1[2]]).reshape(-1,1),
+        			     np.array([0.0, np.cos(t-3.0) / 4, np.cos(t-3.0) / 4]).reshape(-1,1))
+
+        # Return the position and velocity as flat python lists!
+        return (q.flatten().tolist(), qdot.flatten().tolist())
+        
 
 
 #
@@ -105,8 +164,8 @@ def main(args=None):
     # Initialize ROS.
     rclpy.init(args=args)
 
-    # Instantiate the DEMO node.
-    node = DemoNode('demo')
+    # Instantiate the Trajectory node.
+    node = TrajectoryNode('Goals2', Trajectory)
 
     # Spin the node until interrupted.
     rclpy.spin(node)
