@@ -145,12 +145,12 @@ class Trajectory():
 
     # Evaluate at the given time.
     def evaluate(self, t):
-        if (t > 12.0): return None
+        #if (t > 12.0): return None
 
         # Compute the joint values.
         if   (t < 3.0): (q, qdot) = goto(t    , 3.0, self.q0, self.q1)
-        else:           (q, qdot) = (np.array([self.q1[0], np.sin(t-3.0) / 4 + self.q1[1], np.sin(t-3.0) / 4 + self.q1[2]]).reshape(-1,1),
-        			     np.array([0.0, np.cos(t-3.0) / 4, np.cos(t-3.0) / 4]).reshape(-1,1))
+        else:           (q, qdot) = (np.array([self.q1[0], np.sin(t-3.0) / 3 + self.q1[1], np.sin(t-3.0) / 2 + self.q1[2]]).reshape(-1,1),
+        			     np.array([0.0, np.cos(t-3.0) / 3, np.cos(t-3.0) / 2]).reshape(-1,1))
 
         # Return the position and velocity as flat python lists!
         return (q.flatten().tolist(), qdot.flatten().tolist())
