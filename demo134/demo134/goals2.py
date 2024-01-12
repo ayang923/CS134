@@ -103,7 +103,7 @@ class TrajectoryNode(Node):
         if not (len(q) == len(self.jointnames)):
             self.get_logger().warn("(q) must be same length as jointnames!")
             return
-        if not (len(q) == len(self.jointnames)):
+        if not (len(q) == len(qdot)):
             self.get_logger().warn("(qdot) must be same length as (q)!")
             return
         if not (isinstance(q[0], float) and isinstance(qdot[0], float)):
@@ -111,11 +111,6 @@ class TrajectoryNode(Node):
             return
             
         return (q, qdot)
-    
-    def get_position(self):
-    	t = 1e-9 * self.get_clock().now().nanoseconds - self.start_time
-    	return [self.position0[0], self.position0[1], self.position0[2]]
-    	#return [self.position0[0], np.sin(t) / 4 + self.position0[1], np.sin(t) / 4 + self.position0[2]]
 
     # Send a command - called repeatedly by the timer.
     def sendcmd(self):
@@ -136,7 +131,7 @@ class Trajectory():
     def __init__(self, node, q0):
         # Define the joint position for middle of wave.
         self.q0 = np.array(q0).reshape(-1,1)
-        self.q1 = np.array([0.0, 0.0, 0.378]).reshape(-1,1)
+        self.q1 = np.array([0.0, 0.0, 0.0]).reshape(-1,1)
 
     # Declare the joint names.
     def jointnames(self):

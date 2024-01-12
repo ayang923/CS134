@@ -28,6 +28,7 @@ class DemoNode(Node):
 
         # Create a temporary subscriber to grab the initial position.
         self.position0 = self.grabfbk()
+        print(self.position0)
         self.get_logger().info("Initial positions: %r" % self.position0)
 
         # Create a message and publisher to send the joint commands.
@@ -82,17 +83,12 @@ class DemoNode(Node):
         # print(list(fbkmsg.position))
         pass
 
-    def get_position(self):
-    	t = 1e-9 * self.get_clock().now().nanoseconds - self.start_time
-    	return [self.position0[0], self.position0[1], self.position0[2]]
-    	#return [self.position0[0], np.sin(t) / 4 + self.position0[1], np.sin(t) / 4 + self.position0[2]]
-
     # Send a command - called repeatedly by the timer.
     def sendcmd(self):
         # Build up the message and publish.
         self.cmdmsg.header.stamp = self.get_clock().now().to_msg()
         self.cmdmsg.name         = ['one', 'two', 'three']
-        self.cmdmsg.position     = self.get_position()
+        self.cmdmsg.position     = self.position0
         self.cmdmsg.velocity     = []
         self.cmdmsg.effort       = [0.0, 0.0, 0.0]
         self.cmdpub.publish(self.cmdmsg)
