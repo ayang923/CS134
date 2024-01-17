@@ -20,9 +20,9 @@ from basic134.KinematicChain import KinematicChain
 #
 RATE = 100.0            # Hertz
 
-jointnames = ['one',
-              'two',
-              'three']
+chainjointnames = ['base',
+                   'shoulder',
+                   'elbow']
 
 #
 #   Trajectory Node Class
@@ -38,7 +38,7 @@ class TrajectoryNode(Node):
         self.get_logger().info("Initial positions: %r" % self.position0)
         
         self.trajectory = Trajectory(self, self.position0)
-        self.jointnames = self.trajectory.jointnames()
+        self.jointnames = ['base', 'shoulder', 'elbow']
 
         # Create a message and publisher to send the joint commands.
         self.cmdmsg = JointState()
@@ -61,6 +61,9 @@ class TrajectoryNode(Node):
                                (self.timer.timer_period_ns * 1e-9, rate))
         self.start_time = 1e-9 * self.get_clock().now().nanoseconds
 
+    # Called repeatedly by incoming messages - do nothing for now
+    def recvfbk(self, fbkmsg):
+        pass
 
     # Shutdown
     def shutdown(self):
@@ -116,7 +119,7 @@ class TrajectoryNode(Node):
         # Build up the message and publish.
         (q, qdot) = self.update()
         self.cmdmsg.header.stamp = self.get_clock().now().to_msg()
-        self.cmdmsg.name         = ['one', 'two', 'three']
+        self.cmdmsg.name         = self.jointnames
         self.cmdmsg.position     = q
         self.cmdmsg.velocity     = qdot
         self.cmdmsg.effort       = [0.0, 0.0, 0.0]
@@ -138,33 +141,30 @@ class Trajectory():
 
 
         (self.p0, self.R0, _, _) = self.chain.fkin(self.q2) # initial pos/Rot
+        print(self.p0)
 
         self.x = self.p0 # current state pos
         self.R = self.R0 # current state Rot
 
-        self.table_point = np.array([-0.15, 0.55, 0.010]).reshape(-1,1) # hardcoded point to touch, 1cm off table
+        self.table_point = np.array([-0.15, 0.55, 0.050]).reshape(-1,1) # hardcoded point to touch, 1cm off table
 
         self.lam = 20
 
     # Declare the joint names.
     def jointnames(self):
         # Return a list of joint names
-        return jointnames
+        return chainjointnames
 
     # Evaluate at the given time.
     def evaluate(self, t, dt):
         # Compute the joint values.
-        if   (t < 3.0): (self.q, qdot) = goto5(t, 3.0, self.q0, self.q1)
-        elif (t < 4.5): (self.q, qdot) = goto5(t, 4.5, self.q1, self.q2)
-        else:
-            (self.x, _, Jv, _) = self.chain.fkin(self.q)
-            print(self.x)
-            qdot = np.zeros(3).reshape(-1,1)
-        '''elif (t < 16.5):
-            if (t < 10.5):
-                (pd, vd) = goto(t, 6, self.p0, self.table_point)
+        if   (t < 3.0): (self.q, qdot) = goto(t, 3.0, self.q0, self.q1)
+        elif (t < 6.0): (self.q, qdot) = goto(t-3, 3.0, self.q1, self.q2)
+        elif (t < 12.0):
+            if (t < 9.0):
+                (pd, vd) = goto(t-6, 3.0, self.p0, self.table_point)
             else:
-                (pd, vd) = goto(t, 6, self.table_point, self.p0)
+                (pd, vd) = goto(t-9, 3.0, self.table_point, self.p0)
             
 
             (self.x, _, Jv, _) = self.chain.fkin(self.q)
@@ -177,8 +177,6 @@ class Trajectory():
 
             self.q = self.q + qdot*dt
 
-            print(self.q)
-            print(qdot)'''
 
         # Return the position and velocity as flat python lists!
         return (self.q.flatten().tolist(), qdot.flatten().tolist())

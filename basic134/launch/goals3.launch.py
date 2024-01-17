@@ -69,9 +69,11 @@ def generate_launch_description():
         package    = 'hebiros',
         executable = 'hebinode',
         output     = 'screen',
-        parameters = [{'family': 'robotlab'},
-                      {'motors': ['6.3', '6.5', '6.4']},
-                      {'joints': ['one', 'two', 'three']}])
+        parameters = [{'testmode': 'off'},
+                      {'family':   'robotlab'},
+                      {'motors':   ['6.3',  '6.5',      '6.4']},
+                      {'joints':   ['base', 'shoulder', 'elbow']}],
+        on_exit    = Shutdown())
 
     # Configure a node for the simple demo.
     node_goals3 = Node(
