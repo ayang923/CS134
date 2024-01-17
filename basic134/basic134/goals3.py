@@ -20,14 +20,9 @@ from basic134.KinematicChain import KinematicChain
 #
 RATE = 100.0            # Hertz
 
-jointnames = ['placement',
-              'baseplate',
-              'base',
-              'lbracket',
-              'shoulder',
-              'upperarm',
-              'elbow',
-              'lowerarm']
+jointnames = ['one',
+              'two',
+              'three']
 
 #
 #   Trajectory Node Class
@@ -47,7 +42,7 @@ class TrajectoryNode(Node):
 
         # Create a message and publisher to send the joint commands.
         self.cmdmsg = JointState()
-        self.cmdpub = self.create_publisher(JointState, '/joint_commands', 10)
+        self.cmdpub = self.create_publisher(JointState, '/joint_commands', 10) # /joint_commands publisher
 
         # Wait for a connection to happen.  This isn't necessary, but
         # means we don't start until the rest of the system is ready.
@@ -57,7 +52,7 @@ class TrajectoryNode(Node):
 
         # Create a subscriber to continually receive joint state messages.
         self.fbksub = self.create_subscription(
-            JointState, '/joint_states', self.recvfbk, 10)
+            JointState, '/joint_states', self.recvfbk, 10) # /joint_states subscriber (from Hebi!)
 
         # Create a timer to keep calculating/sending commands.
         rate       = RATE
@@ -90,12 +85,7 @@ class TrajectoryNode(Node):
         # Return the values.
         return self.grabpos
 
-    # Receive feedback - called repeatedly by incoming messages.
-    def recvfbk(self, fbkmsg):
-        # Just print the position (for now).
-        # print(list(fbkmsg.position))
-        pass
-        
+    # Receive new command update from trajectory - called repeatedly by incoming messages.
     def update(self):
         self.t = 1e-9 * self.get_clock().now().nanoseconds - self.start_time
          # Compute the desired joint positions and velocities for this time.
@@ -125,8 +115,6 @@ class TrajectoryNode(Node):
     def sendcmd(self):
         # Build up the message and publish.
         (q, qdot) = self.update()
-        q = np.array([q[2], q[4], q[6]]).reshape(-1,1)
-        qdot = np.array([qdot[2], qdot[4], qdot[6]]).reshape(-1,1)
         self.cmdmsg.header.stamp = self.get_clock().now().to_msg()
         self.cmdmsg.name         = ['one', 'two', 'three']
         self.cmdmsg.position     = q
@@ -162,20 +150,14 @@ class Trajectory():
     def jointnames(self):
         # Return a list of joint names
         return jointnames
-        
-    def longq(q):
-        return np.array([0.0,0.0,q[0],0.0,q[1],0.0,q[2],0.0]).reshape(-1,1)
-
-    def shortq(longq):
-        return np.array([longq[2],longq[4],longq[6]]).reshape(-1,1)
 
     # Evaluate at the given time.
     def evaluate(self, t, dt):
         # Compute the joint values.
-        if   (t < 3.0): (self.q, qdot) = goto(t, 3.0, self.q0, self.q1)
-        elif (t < 4.5): (self.q, qdot) = goto(t, 4.5, self.q1, self.q2)
+        if   (t < 3.0): (self.q, qdot) = goto5(t, 3.0, self.q0, self.q1)
+        elif (t < 4.5): (self.q, qdot) = goto5(t, 4.5, self.q1, self.q2)
         else:
-            (self.x, _, Jv, _) = self.chain.fkin(self.longq(self.q))
+            (self.x, _, Jv, _) = self.chain.fkin(self.q)
             print(self.x)
             qdot = np.zeros(3).reshape(-1,1)
         '''elif (t < 16.5):
@@ -198,12 +180,8 @@ class Trajectory():
             print(self.q)
             print(qdot)'''
 
-        print(self.q)
-        q = self.longq(self.q)
-        qdot = self.longq(qdot)
-
         # Return the position and velocity as flat python lists!
-        return (q.flatten().tolist(), qdot.flatten().tolist())
+        return (self.q.flatten().tolist(), qdot.flatten().tolist())
         
 
 

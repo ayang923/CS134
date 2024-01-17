@@ -200,10 +200,10 @@ class KinematicChain():
             self.info(string)
 
         # Confirm the active joint names matches the expectation
-        #jointnames = [s.name for s in self.steps if s.dof is not None]
-        #if jointnames != list(expectedjointnames):
-        #    self.error("Chain does not match the expected names: " +
-        #          str(expectedjointnames))
+        jointnames = [s.name for s in self.steps if s.dof is not None]
+        if jointnames != list(expectedjointnames):
+            self.error("Chain does not match the expected names: " +
+                  str(expectedjointnames))
 
 
     # Compute the forward kinematics!
