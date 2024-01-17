@@ -10,7 +10,7 @@ import rclpy
 from rclpy.node         import Node
 from sensor_msgs.msg    import JointState
 
-from demo134.trajutils import goto, goto5
+from basic134.TrajectoryUtils import goto, goto5
 
 
 #
@@ -129,7 +129,7 @@ class TrajectoryNode(Node):
 class Trajectory():
     # Initialization.
     def __init__(self, node, q0):
-        # Define the joint position for middle of wave.
+        # Define the starting sequence joint positions.
         self.q0 = np.array(q0).reshape(-1,1)
         self.q1 = np.array([q0[0], 0.0, q0[2]]).reshape(-1,1)
         self.q2 = np.array([0.0, 0.0, np.pi/2]).reshape(-1,1)
