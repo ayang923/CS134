@@ -12,6 +12,7 @@ from sensor_msgs.msg    import JointState
 
 from basic134.TrajectoryUtils import goto, goto5
 from basic134.TransformHelpers import *
+from basic134.KinematicChain import KinematicChain
 
 
 #
@@ -19,6 +20,14 @@ from basic134.TransformHelpers import *
 #
 RATE = 100.0            # Hertz
 
+jointnames = ['placement',
+              'baseplate',
+              'base',
+              'lbracket',
+              'shoulder',
+              'upperarm',
+              'elbow',
+              'lowerarm']
 
 #
 #   Trajectory Node Class
@@ -116,6 +125,8 @@ class TrajectoryNode(Node):
     def sendcmd(self):
         # Build up the message and publish.
         (q, qdot) = self.update()
+        q = np.array([q[2], q[4], q[6]]).reshape(-1,1)
+        qdot = np.array([qdot[2], qdot[4], qdot[6]]).reshape(-1,1)
         self.cmdmsg.header.stamp = self.get_clock().now().to_msg()
         self.cmdmsg.name         = ['one', 'two', 'three']
         self.cmdmsg.position     = q
@@ -135,27 +146,39 @@ class Trajectory():
         self.q0 = np.array(q0).reshape(-1,1)
         self.q1 = np.array([q0[0], 0.0, q0[2]]).reshape(-1,1)
         self.q2 = np.array([0.0, 0.0, np.pi/2]).reshape(-1,1) # upright with elbow at 90, pointing fwd
-        
+        self.q = self.q0
+
+
         (self.p0, self.R0, _, _) = self.chain.fkin(self.q2) # initial pos/Rot
 
-        self.x = self.p2 # current state pos
-        self.R = self.R2 # current state Rot
+        self.x = self.p0 # current state pos
+        self.R = self.R0 # current state Rot
 
-        self.table_point = (-0.15, 0.55, 0.010) # hardcoded point to touch, 1cm off table
+        self.table_point = np.array([-0.15, 0.55, 0.010]).reshape(-1,1) # hardcoded point to touch, 1cm off table
 
         self.lam = 20
 
     # Declare the joint names.
     def jointnames(self):
         # Return a list of joint names
-        return ['one', 'two', 'three']
+        return jointnames
+        
+    def longq(q):
+        return np.array([0.0,0.0,q[0],0.0,q[1],0.0,q[2],0.0]).reshape(-1,1)
+
+    def shortq(longq):
+        return np.array([longq[2],longq[4],longq[6]]).reshape(-1,1)
 
     # Evaluate at the given time.
     def evaluate(self, t, dt):
         # Compute the joint values.
-        if   (t < 3.0): (q, qdot) = goto(t, 3.0, self.q0, self.q1)
-        elif (t < 4.5): (q, qdot) = goto(t, 4.5, self.q1, self.q2)
-        elif (t < 16.5):
+        if   (t < 3.0): (self.q, qdot) = goto(t, 3.0, self.q0, self.q1)
+        elif (t < 4.5): (self.q, qdot) = goto(t, 4.5, self.q1, self.q2)
+        else:
+            (self.x, _, Jv, _) = self.chain.fkin(self.longq(self.q))
+            print(self.x)
+            qdot = np.zeros(3).reshape(-1,1)
+        '''elif (t < 16.5):
             if (t < 10.5):
                 (pd, vd) = goto(t, 6, self.p0, self.table_point)
             else:
@@ -172,8 +195,12 @@ class Trajectory():
 
             self.q = self.q + qdot*dt
 
-        else: return None
+            print(self.q)
+            print(qdot)'''
 
+        print(self.q)
+        q = self.longq(self.q)
+        qdot = self.longq(qdot)
 
         # Return the position and velocity as flat python lists!
         return (q.flatten().tolist(), qdot.flatten().tolist())
