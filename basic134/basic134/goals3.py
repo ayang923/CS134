@@ -11,6 +11,7 @@ from rclpy.node         import Node
 from sensor_msgs.msg    import JointState
 
 from basic134.TrajectoryUtils import goto, goto5
+from basic134.TransformHelpers import *
 
 
 #
@@ -88,9 +89,8 @@ class TrajectoryNode(Node):
         
     def update(self):
         self.t = 1e-9 * self.get_clock().now().nanoseconds - self.start_time
-        
          # Compute the desired joint positions and velocities for this time.
-        desired = self.trajectory.evaluate(self.t)
+        desired = self.trajectory.evaluate(self.t, 1/RATE)
         if desired is None:
             self.future.set_result("Trajectory has ended")
             return
@@ -129,10 +129,21 @@ class TrajectoryNode(Node):
 class Trajectory():
     # Initialization.
     def __init__(self, node, q0):
+        self.chain = KinematicChain(node, 'world', 'tip', self.jointnames())
+        
         # Define the starting sequence joint positions.
         self.q0 = np.array(q0).reshape(-1,1)
         self.q1 = np.array([q0[0], 0.0, q0[2]]).reshape(-1,1)
-        self.q2 = np.array([0.0, 0.0, np.pi/2]).reshape(-1,1)
+        self.q2 = np.array([0.0, 0.0, np.pi/2]).reshape(-1,1) # upright with elbow at 90, pointing fwd
+        
+        (self.p0, self.R0, _, _) = self.chain.fkin(self.q2) # initial pos/Rot
+
+        self.x = self.p2 # current state pos
+        self.R = self.R2 # current state Rot
+
+        self.table_point = (-0.15, 0.55, 0.010) # hardcoded point to touch, 1cm off table
+
+        self.lam = 20
 
     # Declare the joint names.
     def jointnames(self):
@@ -140,15 +151,31 @@ class Trajectory():
         return ['one', 'two', 'three']
 
     # Evaluate at the given time.
-    def evaluate(self, t):
+    def evaluate(self, t, dt):
         #if (t > 12.0): return None
 
         # Compute the joint values.
         if   (t < 3.0): (q, qdot) = goto(t, 3.0, self.q0, self.q1)
         elif (t < 4.5): (q, qdot) = goto(t, 4.5, self.q1, self.q2)
-        else: return None
-        #else:           (q, qdot) = (np.array([self.q1[0], np.sin(t-3.0) / 3 + self.q1[1], np.sin(t-3.0) / 2 + self.q1[2]]).reshape(-1,1),
-        #			     np.array([0.0, np.cos(t-3.0) / 3, np.cos(t-3.0) / 2]).reshape(-1,1))
+        elif (t < 16.5):
+            if (t < 10.5):
+                (pd, vd) = goto(t, 6, self.p0, self.table_point)
+                # TODO need to define Rd, wd
+            else:
+                (pd, vd) = goto(t, 6, self.table_point, self.p0)
+                # TODO need to define Rd, wd
+            
+
+            (self.x, self.R, Jv, Jw) = self.chain.fkin(self.q)
+
+            e = np.vstack((ep(pd, self.x), eR(Rd, self.R)))
+            J = np.vstack((Jv, Jw))
+            xdotd = np.vstack((vd, wd))
+
+            qdot = np.linalg.inv(J)@(xdotd + e*self.lam)
+
+            self.q = self.q + qdot*dt
+
 
         # Return the position and velocity as flat python lists!
         return (q.flatten().tolist(), qdot.flatten().tolist())
