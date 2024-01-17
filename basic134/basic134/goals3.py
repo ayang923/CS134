@@ -152,29 +152,27 @@ class Trajectory():
 
     # Evaluate at the given time.
     def evaluate(self, t, dt):
-        #if (t > 12.0): return None
-
         # Compute the joint values.
         if   (t < 3.0): (q, qdot) = goto(t, 3.0, self.q0, self.q1)
         elif (t < 4.5): (q, qdot) = goto(t, 4.5, self.q1, self.q2)
         elif (t < 16.5):
             if (t < 10.5):
                 (pd, vd) = goto(t, 6, self.p0, self.table_point)
-                # TODO need to define Rd, wd
             else:
                 (pd, vd) = goto(t, 6, self.table_point, self.p0)
-                # TODO need to define Rd, wd
             
 
-            (self.x, self.R, Jv, Jw) = self.chain.fkin(self.q)
+            (self.x, _, Jv, _) = self.chain.fkin(self.q)
 
-            e = np.vstack((ep(pd, self.x), eR(Rd, self.R)))
-            J = np.vstack((Jv, Jw))
-            xdotd = np.vstack((vd, wd))
+            e = ep(pd, self.x)
+            J = Jv
+            xdotd = vd
 
             qdot = np.linalg.inv(J)@(xdotd + e*self.lam)
 
             self.q = self.q + qdot*dt
+
+        else: return None
 
 
         # Return the position and velocity as flat python lists!
