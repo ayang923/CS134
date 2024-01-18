@@ -79,6 +79,13 @@ class TrajectoryNode(Node):
         y = pointmsg.y
         z = pointmsg.z
         
+        origin = np.array([-0.3, 0.03, 0.15]).reshape(-1,1)
+        point = np.array([x, y, z]).reshape(-1,1)
+        
+        # print warning
+        if np.linalg.norm(point - origin) > 0.75:
+            self.get_logger().info("Input near / outside workspace!")
+        
         # Report.
         self.trajectory.state_queue += [(State.ACTION, np.array([x, y, z]).reshape((3, 1))), (State.INIT, None)]
 
@@ -154,12 +161,14 @@ class TrajectoryNode(Node):
         self.cmdpub.publish(self.cmdmsg)
 
 class InitState():
-    def __init__(self, t, trajectory):
+    def __init__(self, t, trajectory, initial = True):
         self.start = t
         self.trajectory = trajectory
 
         self.q0 = self.trajectory.q
         self.q1 = self.trajectory.q1
+        if not initial:
+            self.q1[2] = 0.0
         self.q2 = self.trajectory.q2
 
         self.done = np.linalg.norm(self.q2 - self.q0) < 0.1
@@ -199,7 +208,9 @@ class ActionState():
             J = Jv
             xdotd = vd
 
-            qdot = np.linalg.inv(J)@(xdotd + e*self.trajectory.lam)
+            J_Winv = np.transpose(J)@np.linalg.inv(J@np.transpose(J) + (0.3**2)*np.eye(3))
+
+            qdot = J_Winv@(xdotd + e*self.trajectory.lam)
 
             q = self.trajectory.q + qdot*dt
 
@@ -219,7 +230,7 @@ class StateHandler():
         if self.state_object.done:
             self.state = state
             if self.state == State.INIT:
-                self.state_object = InitState(t, self.trajectory)
+                self.state_object = InitState(t, self.trajectory, initial = False)
             elif self.state == State.ACTION:
                 self.state_object = ActionState(t, self.trajectory, *args)
             return True
@@ -248,7 +259,7 @@ class Trajectory():
 
         self.x = self.p0 # current state pos
 
-        self.table_point = np.array([-0.3, 0.7, 0.05]).reshape(-1,1) # hardcoded point to touch
+        self.table_point = np.array([-0.3, 0.7, 0.0]).reshape(-1,1) # hardcoded point to touch
 
         self.lam = 10
 
