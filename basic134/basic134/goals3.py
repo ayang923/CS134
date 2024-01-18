@@ -146,7 +146,7 @@ class Trajectory():
         self.x = self.p0 # current state pos
         self.R = self.R0 # current state Rot
 
-        self.table_point = np.array([-0.15, 0.55, 0.050]).reshape(-1,1) # hardcoded point to touch, 1cm off table
+        self.table_point = np.array([-0.17, 0.68, 0.050]).reshape(-1,1) # hardcoded point to touch, 1cm off table
 
         self.lam = 20
 
@@ -158,13 +158,13 @@ class Trajectory():
     # Evaluate at the given time.
     def evaluate(self, t, dt):
         # Compute the joint values.
-        if   (t < 3.0): (self.q, qdot) = goto(t, 3.0, self.q0, self.q1)
-        elif (t < 6.0): (self.q, qdot) = goto(t-3, 3.0, self.q1, self.q2)
+        if   (t < 3.0): (self.q, qdot) = goto5(t, 3.0, self.q0, self.q1)
+        elif (t < 6.0): (self.q, qdot) = goto5(t-3, 3.0, self.q1, self.q2)
         elif (t < 12.0):
             if (t < 9.0):
-                (pd, vd) = goto(t-6, 3.0, self.p0, self.table_point)
+                (pd, vd) = goto5(t-6, 3.0, self.p0, self.table_point)
             else:
-                (pd, vd) = goto(t-9, 3.0, self.table_point, self.p0)
+                (pd, vd) = goto5(t-9, 3.0, self.table_point, self.p0)
             
 
             (self.x, _, Jv, _) = self.chain.fkin(self.q)
