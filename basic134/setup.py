@@ -28,6 +28,7 @@ setup(
             'demo134      = basic134.demo134:main',
             'receivepoint = basic134.receivepoint:main',
             'goals3       = basic134.goals3:main',
+            'gravitycomp  = basic134.gravitycomp:main',
         ],
     },
 )

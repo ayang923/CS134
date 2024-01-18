@@ -1,9 +1,8 @@
-#!/usr/bin/env python3
-#
-#   goals3.py
-#
-#   goals3 Node and Trajectory with touching point
-#
+'''
+gravitycomp.py
+gravity compensation testing and functions
+'''
+
 import numpy as np
 import rclpy
 
@@ -33,11 +32,17 @@ class TrajectoryNode(Node):
         # Initialize the node, naming it as specified
         super().__init__(name)        
 
+        self.actpos = None
+        self.statessub = self.create_subscription(JointState, '/joint_states', self.cb_states, 1)
+        while self.actpos is None:
+            rclpy.spin_once(self)
+        self.get_logger().info("Initial positions: %r" % self.actpos)
+
         # Create a temporary subscriber to grab the initial position.
-        self.position0 = self.grabfbk()
-        self.get_logger().info("Initial positions: %r" % self.position0)
+        #self.position0 = self.grabfbk()
+        #self.get_logger().info("Initial positions: %r" % self.position0)
         
-        self.trajectory = Trajectory(self, self.position0)
+        #self.trajectory = Trajectory(self, self.position0)
         self.jointnames = ['base', 'shoulder', 'elbow']
 
         # Create a message and publisher to send the joint commands.
@@ -61,9 +66,13 @@ class TrajectoryNode(Node):
                                (self.timer.timer_period_ns * 1e-9, rate))
         self.start_time = 1e-9 * self.get_clock().now().nanoseconds
 
+    def cb_states(self, msg):
+        # Save the actual position.
+        self.actpos = list(msg.position)
+
     # Called repeatedly by incoming messages - do nothing for now
     def recvfbk(self, fbkmsg):
-        pass
+        self.actpos = list(fbkmsg.position)
 
     # Shutdown
     def shutdown(self):
@@ -115,7 +124,7 @@ class TrajectoryNode(Node):
         return (q, qdot)
     
     def gravitycomp(self, q):
-        A = 1
+        A = 0.1
         B = 0
         tau_shoulder = A*np.sin(q[1]) + B*np.cos(q[1])
         return tau_shoulder
@@ -123,12 +132,13 @@ class TrajectoryNode(Node):
     # Send a command - called repeatedly by the timer.
     def sendcmd(self):
         # Build up the message and publish.
-        (q, qdot) = self.update()
+        tau_shoulder = self.gravitycomp(self.actpos) # get gravity comp given q from last Joint_States msg
+        nan = float("nan")
         self.cmdmsg.header.stamp = self.get_clock().now().to_msg()
         self.cmdmsg.name         = self.jointnames
-        self.cmdmsg.position     = q
-        self.cmdmsg.velocity     = qdot
-        self.cmdmsg.effort       = [0.0, 0.0, 0.0]
+        self.cmdmsg.position     = [nan, nan, nan]
+        self.cmdmsg.velocity     = [nan, nan, nan]
+        self.cmdmsg.effort       = [0.0, tau_shoulder, 0.0]
         self.cmdpub.publish(self.cmdmsg)
 
 #
@@ -208,3 +218,4 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
+
