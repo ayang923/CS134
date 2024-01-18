@@ -17,7 +17,7 @@
   <joint name="placement" type="fixed">
     <parent link="world"/>
     <child  link="baseplate"/>
-    <origin xyz="0 0 0" rpy="0 0 0"/>			<!-- WHERE IS THE BASE -->
+    <origin xyz="0 0.0394 0" rpy="0 0 0"/>			<!-- WHERE IS THE BASE -->
   </joint>
 
   <!-- BASE PLATE: Shift across the base plate to the base motor. --> 
@@ -134,7 +134,7 @@
   <joint name="lowerarm" type="fixed">
     <parent link="lowerarm"/>
     <child  link="tip"/>
-    <origin xyz="0.3785 0.0 0.00285" rpy="0 0 0"/>		  <!-- UPPER ARM DIMENIONS -->
+    <origin xyz="0.3685 0.0 0.00285" rpy="0 0 0"/>		  <!-- UPPER ARM DIMENIONS -->
   </joint>
 
   <!-- TIP FRAME -->

@@ -115,7 +115,7 @@ class TrajectoryNode(Node):
         return (q, qdot)
     
     def gravitycomp(self, q):
-        A = 1
+        A = -1.5
         B = 0
         tau_shoulder = A*np.sin(q[1]) + B*np.cos(q[1])
         return tau_shoulder
@@ -124,11 +124,12 @@ class TrajectoryNode(Node):
     def sendcmd(self):
         # Build up the message and publish.
         (q, qdot) = self.update()
+        tau_shoulder = self.gravitycomp(q)
         self.cmdmsg.header.stamp = self.get_clock().now().to_msg()
         self.cmdmsg.name         = self.jointnames
         self.cmdmsg.position     = q
         self.cmdmsg.velocity     = qdot
-        self.cmdmsg.effort       = [0.0, 0.0, 0.0]
+        self.cmdmsg.effort       = [0.0, tau_shoulder, 0.0]
         self.cmdpub.publish(self.cmdmsg)
 
 #
@@ -146,15 +147,13 @@ class Trajectory():
         self.q = self.q0
 
 
-        (self.p0, self.R0, _, _) = self.chain.fkin(self.q2) # initial pos/Rot
-        print(self.p0)
+        (self.p0, _, _, _) = self.chain.fkin(self.q2) # initial pos/Rot
 
         self.x = self.p0 # current state pos
-        self.R = self.R0 # current state Rot
 
-        self.table_point = np.array([-0.17, 0.68, 0.050]).reshape(-1,1) # hardcoded point to touch, 1cm off table
+        self.table_point = np.array([-0.17, 0.68, 0.0]).reshape(-1,1) # hardcoded point to touch
 
-        self.lam = 20
+        self.lam = 10
 
     # Declare the joint names.
     def jointnames(self):
@@ -164,13 +163,13 @@ class Trajectory():
     # Evaluate at the given time.
     def evaluate(self, t, dt):
         # Compute the joint values.
-        if   (t < 3.0): (self.q, qdot) = goto5(t, 3.0, self.q0, self.q1)
-        elif (t < 6.0): (self.q, qdot) = goto5(t-3, 3.0, self.q1, self.q2)
+        if   (t < 3.0): (self.q, qdot) = goto5(t, 3.0, self.q0, self.q1) # joint space spline
+        elif (t < 6.0): (self.q, qdot) = goto5(t-3, 3.0, self.q1, self.q2) # joint space spline
         elif (t < 12.0):
             if (t < 9.0):
-                (pd, vd) = goto5(t-6, 3.0, self.p0, self.table_point)
+                (pd, vd) = goto5(t-6, 3.0, self.p0, self.table_point) # task spline
             else:
-                (pd, vd) = goto5(t-9, 3.0, self.table_point, self.p0)
+                (pd, vd) = goto5(t-9, 3.0, self.table_point, self.p0) # task spline
             
 
             (self.x, _, Jv, _) = self.chain.fkin(self.q)

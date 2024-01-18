@@ -124,8 +124,8 @@ class TrajectoryNode(Node):
         return (q, qdot)
     
     def gravitycomp(self, q):
-        A = 0.1
-        B = 0
+        A = -1.5
+        B = 0.0
         tau_shoulder = A*np.sin(q[1]) + B*np.cos(q[1])
         return tau_shoulder
 
@@ -133,6 +133,7 @@ class TrajectoryNode(Node):
     def sendcmd(self):
         # Build up the message and publish.
         tau_shoulder = self.gravitycomp(self.actpos) # get gravity comp given q from last Joint_States msg
+        print(tau_shoulder)
         nan = float("nan")
         self.cmdmsg.header.stamp = self.get_clock().now().to_msg()
         self.cmdmsg.name         = self.jointnames
