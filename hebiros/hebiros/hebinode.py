@@ -75,7 +75,7 @@ class HebiNode(Node):
         self.fbkmsg      = JointState()
         self.fbkmsg.name = self.joints   # Set to the joint names
 
-        self.pub = self.create_publisher(JointState, '/joint_states', 10)
+        self.pub = self.create_publisher(JointState, '/joint_states', 100)
 
         # Feedback Source: If online, create a HEBI feeedback handler
         # to drive this.  Else use a timer.
@@ -90,7 +90,7 @@ class HebiNode(Node):
             self.cmd  = hebi.GroupCommand(self.group.size)
             self.nans = np.full(self.N, np.nan)
             self.sub  = self.create_subscription(
-                JointState, '/joint_commands', self.commandCB, 10)
+                JointState, '/joint_commands', self.commandCB, 100)
         else:
             self.cmdmsg = JointState()
             self.fbkmsg.name     = self.joints
@@ -98,7 +98,7 @@ class HebiNode(Node):
             self.cmdmsg.velocity = [0.0] * self.N
             self.cmdmsg.effort   = [0.0] * self.N
             self.sub  = self.create_subscription(
-                JointState, '/joint_commands', self.fakecmdCB, 10)
+                JointState, '/joint_commands', self.fakecmdCB, 100)
 
         # Finally create a watchdog timer to check the HEBI connection.
         self.watchdog = self.create_timer(WATCHDOGDT, self.watchdogCB)

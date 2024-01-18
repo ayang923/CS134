@@ -12,7 +12,10 @@ from sensor_msgs.msg    import JointState
 
 from basic134.TrajectoryUtils import goto, goto5
 from basic134.TransformHelpers import *
+
 from basic134.KinematicChain import KinematicChain
+
+from enum import Enum
 
 
 #
@@ -24,6 +27,11 @@ chainjointnames = ['base',
                    'shoulder',
                    'elbow']
 
+class State(Enum):
+    INIT = 1
+    WAIT = 2
+    ACTION = 3
+
 #
 #   Trajectory Node Class
 #
@@ -31,10 +39,14 @@ class TrajectoryNode(Node):
     # Initialization.
     def __init__(self, name, Trajectory):
         # Initialize the node, naming it as specified
-        super().__init__(name)        
+        super().__init__(name)
+
+        self.fbksub = self.create_subscription(
+            Point, '/point', self.recvpoint, 10)        
 
         # Create a temporary subscriber to grab the initial position.
         self.position0 = self.grabfbk()
+        self.actpos = self.position0
         self.get_logger().info("Initial positions: %r" % self.position0)
         
         self.trajectory = Trajectory(self, self.position0)
@@ -42,7 +54,7 @@ class TrajectoryNode(Node):
 
         # Create a message and publisher to send the joint commands.
         self.cmdmsg = JointState()
-        self.cmdpub = self.create_publisher(JointState, '/joint_commands', 10) # /joint_commands publisher
+        self.cmdpub = self.create_publisher(JointState, '/joint_commands', 100) # /joint_commands publisher
 
         # Wait for a connection to happen.  This isn't necessary, but
         # means we don't start until the rest of the system is ready.
@@ -52,7 +64,7 @@ class TrajectoryNode(Node):
 
         # Create a subscriber to continually receive joint state messages.
         self.fbksub = self.create_subscription(
-            JointState, '/joint_states', self.recvfbk, 10) # /joint_states subscriber (from Hebi!)
+            JointState, '/joint_states', self.recvfbk, 100) # /joint_states subscriber (from Hebi!)
 
         # Create a timer to keep calculating/sending commands.
         rate       = RATE
@@ -61,9 +73,18 @@ class TrajectoryNode(Node):
                                (self.timer.timer_period_ns * 1e-9, rate))
         self.start_time = 1e-9 * self.get_clock().now().nanoseconds
 
+    def recvpoint(self, pointmsg):
+        # Extract the data.
+        x = pointmsg.x
+        y = pointmsg.y
+        z = pointmsg.z
+        
+        # Report.
+        self.trajectory.state_queue += [(State.ACTION, np.array([x, y, z]).reshape((3, 1))), (State.INIT, None)]
+
     # Called repeatedly by incoming messages - do nothing for now
     def recvfbk(self, fbkmsg):
-        pass
+        self.actpos = list(fbkmsg.position)
 
     # Shutdown
     def shutdown(self):
@@ -124,13 +145,89 @@ class TrajectoryNode(Node):
     def sendcmd(self):
         # Build up the message and publish.
         (q, qdot) = self.update()
-        tau_shoulder = self.gravitycomp(q)
+        tau_shoulder = self.gravitycomp(self.actpos)
         self.cmdmsg.header.stamp = self.get_clock().now().to_msg()
         self.cmdmsg.name         = self.jointnames
         self.cmdmsg.position     = q
         self.cmdmsg.velocity     = qdot
         self.cmdmsg.effort       = [0.0, tau_shoulder, 0.0]
         self.cmdpub.publish(self.cmdmsg)
+
+class InitState():
+    def __init__(self, t, trajectory):
+        self.start = t
+        self.trajectory = trajectory
+
+        self.q0 = self.trajectory.q
+        self.q1 = self.trajectory.q1
+        self.q2 = self.trajectory.q2
+
+        self.done = np.linalg.norm(self.q2 - self.q0) < 0.1
+
+    def evaluate(self, t, dt):
+        t = t - self.start
+        if self.done:
+            return self.trajectory.q, np.zeros((3, 1))
+        elif (t < 3.0):
+            return goto5(t, 3.0, self.q0, self.q1)
+        elif (t < 6.0):
+            return goto5(t-3, 3.0, self.q1, self.q2)
+        else:
+            self.done = True
+            return self.trajectory.q, np.zeros((3, 1))
+
+class ActionState():
+    def __init__(self, t, trajectory, x_t):
+        self.start = t
+        self.trajectory = trajectory
+        
+        self.q0 = self.trajectory.q
+        self.p0 = self.trajectory.x
+
+        self.x_t = x_t
+        self.done = False
+
+    def evaluate(self, t, dt):
+        t = t - self.start
+
+        if t < 3.0:
+            (pd, vd) = goto5(t, 3.0, self.p0, self.x_t)
+
+            (self.trajectory.x, _, Jv, _) = self.trajectory.chain.fkin(self.trajectory.q)
+
+            e = ep(pd, self.trajectory.x)
+            J = Jv
+            xdotd = vd
+
+            qdot = np.linalg.inv(J)@(xdotd + e*self.trajectory.lam)
+
+            q = self.trajectory.q + qdot*dt
+
+        else:
+            q, qdot = self.trajectory.q, np.zeros((3, 1))
+            self.done = True
+
+        return q, qdot
+
+class StateHandler():
+    def __init__(self, init_state: State, trajectory):
+        self.trajectory = trajectory
+        self.state = init_state
+        self.state_object = InitState(0, trajectory)
+
+    def set_state(self, state: State, t, *args):
+        if self.state_object.done:
+            self.state = state
+            if self.state == State.INIT:
+                self.state_object = InitState(t, self.trajectory)
+            elif self.state == State.ACTION:
+                self.state_object = ActionState(t, self.trajectory, *args)
+            return True
+        else:
+            return False
+    
+    def get_evaluator(self):
+        return self.state_object.evaluate
 
 #
 #   Trajectory Class
@@ -151,9 +248,12 @@ class Trajectory():
 
         self.x = self.p0 # current state pos
 
-        self.table_point = np.array([-0.17, 0.68, 0.0]).reshape(-1,1) # hardcoded point to touch
+        self.table_point = np.array([-0.3, 0.7, 0.05]).reshape(-1,1) # hardcoded point to touch
 
         self.lam = 10
+
+        self.state_handler = StateHandler(State.INIT, self)
+        self.state_queue = [(State.ACTION, self.table_point), (State.INIT, None)]
 
     # Declare the joint names.
     def jointnames(self):
@@ -163,30 +263,36 @@ class Trajectory():
     # Evaluate at the given time.
     def evaluate(self, t, dt):
         # Compute the joint values.
-        if   (t < 3.0): (self.q, qdot) = goto5(t, 3.0, self.q0, self.q1) # joint space spline
-        elif (t < 6.0): (self.q, qdot) = goto5(t-3, 3.0, self.q1, self.q2) # joint space spline
-        elif (t < 12.0):
-            if (t < 9.0):
-                (pd, vd) = goto5(t-6, 3.0, self.p0, self.table_point) # task spline
-            else:
-                (pd, vd) = goto5(t-9, 3.0, self.table_point, self.p0) # task spline
+        #if   self.state == State.INIT: return self.evaluate_init(t, dt)
+        # self.q, qdot = self.state_trajectory.evaluate(t, dt, self.q)
+        # elif (t < 12.0):
+        #     if (t < 9.0):
+        #         (pd, vd) = goto5(t-6, 3.0, self.p0, self.table_point) # task spline
+        #     else:
+        #         (pd, vd) = goto5(t-9, 3.0, self.table_point, self.p0) # task spline
             
 
-            (self.x, _, Jv, _) = self.chain.fkin(self.q)
+        #     (self.x, _, Jv, _) = self.chain.fkin(self.q)
 
-            e = ep(pd, self.x)
-            J = Jv
-            xdotd = vd
+        #     e = ep(pd, self.x)
+        #     J = Jv
+        #     xdotd = vd
 
-            qdot = np.linalg.inv(J)@(xdotd + e*self.lam)
+        #     qdot = np.linalg.inv(J)@(xdotd + e*self.lam)
 
-            self.q = self.q + qdot*dt
+        #     self.q = self.q + qdot*dt
 
+        # else:
+        #     qdot = np.zeros((3, 1))
 
+        self.q, qdot = self.state_handler.get_evaluator()(t, dt)
+        self.x, _, _, _ = self.chain.fkin(self.q)
+        if self.state_queue:
+            head_el = self.state_queue[0]
+            if self.state_handler.set_state(head_el[0], t, head_el[1]):
+                self.state_queue.pop(0)
         # Return the position and velocity as flat python lists!
         return (self.q.flatten().tolist(), qdot.flatten().tolist())
-        
-
 
 #
 #   Main Code
