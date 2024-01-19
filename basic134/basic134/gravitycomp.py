@@ -124,22 +124,21 @@ class TrajectoryNode(Node):
         return (q, qdot)
     
     def gravitycomp(self, q):
-        A = -1.5
-        B = 0.0
-        tau_shoulder = A*np.sin(q[1]) + B*np.cos(q[1])
-        return tau_shoulder
+        tau_shoulder = -1.6 * np.sin(q[1])
+        tau_elbow = -0.1 * np.sin(q[1] + q[2])
+        return [0.0, tau_shoulder, tau_elbow]
 
     # Send a command - called repeatedly by the timer.
     def sendcmd(self):
         # Build up the message and publish.
-        tau_shoulder = self.gravitycomp(self.actpos) # get gravity comp given q from last Joint_States msg
-        print(tau_shoulder)
+        effort = self.gravitycomp(self.actpos) # get gravity comp given q from last Joint_States msg
+        print(effort)
         nan = float("nan")
         self.cmdmsg.header.stamp = self.get_clock().now().to_msg()
         self.cmdmsg.name         = self.jointnames
         self.cmdmsg.position     = [nan, nan, nan]
         self.cmdmsg.velocity     = [nan, nan, nan]
-        self.cmdmsg.effort       = [0.0, tau_shoulder, 0.0]
+        self.cmdmsg.effort       = effort
         self.cmdpub.publish(self.cmdmsg)
 
 #

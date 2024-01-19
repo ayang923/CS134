@@ -23,9 +23,7 @@ from enum import Enum
 #
 RATE = 100.0            # Hertz
 
-chainjointnames = ['base',
-                   'shoulder',
-                   'elbow']
+chainjointnames = ['base', 'shoulder', 'elbow']
 
 class State(Enum):
     INIT = 1
@@ -50,7 +48,7 @@ class TrajectoryNode(Node):
         self.get_logger().info("Initial positions: %r" % self.position0)
         
         self.trajectory = Trajectory(self, self.position0)
-        self.jointnames = ['base', 'shoulder', 'elbow']
+        self.jointnames = chainjointnames
 
         # Create a message and publisher to send the joint commands.
         self.cmdmsg = JointState()
@@ -87,7 +85,7 @@ class TrajectoryNode(Node):
             self.get_logger().info("Input near / outside workspace!")
         
         # Report.
-        self.trajectory.state_queue += [(State.ACTION, np.array([x, y, z]).reshape((3, 1))), (State.INIT, None)]
+        self.trajectory.state_queue += [(State.ACTION, point), (State.INIT, None)]
 
     # Called repeatedly by incoming messages - do nothing for now
     def recvfbk(self, fbkmsg):
@@ -116,11 +114,14 @@ class TrajectoryNode(Node):
         # Return the values.
         return self.grabpos
 
+    def get_time(self):
+        return 1e-9 * self.get_clock().now().nanoseconds - self.start_time
+
     # Receive new command update from trajectory - called repeatedly by incoming messages.
     def update(self):
-        self.t = 1e-9 * self.get_clock().now().nanoseconds - self.start_time
+        self.t = self.get_time()
          # Compute the desired joint positions and velocities for this time.
-        desired = self.trajectory.evaluate(self.t, 1/RATE)
+        desired = self.trajectory.evaluate(self.t, 1 / RATE)
         if desired is None:
             self.future.set_result("Trajectory has ended")
             return
@@ -143,21 +144,20 @@ class TrajectoryNode(Node):
         return (q, qdot)
     
     def gravitycomp(self, q):
-        A = -1.5
-        B = 0
-        tau_shoulder = A*np.sin(q[1]) + B*np.cos(q[1])
-        return tau_shoulder
+        tau_shoulder = -1.6 * np.sin(q[1])
+        tau_elbow = -0.1 * np.sin(q[1] + q[2])
+        return [0.0, tau_shoulder, tau_elbow]
 
     # Send a command - called repeatedly by the timer.
     def sendcmd(self):
         # Build up the message and publish.
         (q, qdot) = self.update()
-        tau_shoulder = self.gravitycomp(self.actpos)
+        effort = [0.0, 0.0, 0.0] #self.gravitycomp(self.actpos)
         self.cmdmsg.header.stamp = self.get_clock().now().to_msg()
         self.cmdmsg.name         = self.jointnames
         self.cmdmsg.position     = q
         self.cmdmsg.velocity     = qdot
-        self.cmdmsg.effort       = [0.0, tau_shoulder, 0.0]
+        self.cmdmsg.effort       = effort
         self.cmdpub.publish(self.cmdmsg)
 
 class InitState():
@@ -259,7 +259,7 @@ class Trajectory():
 
         self.x = self.p0 # current state pos
 
-        self.table_point = np.array([-0.3, 0.7, 0.0]).reshape(-1,1) # hardcoded point to touch
+        self.table_point = np.array([-0.6, 0.35, 0.0]).reshape(-1,1) # hardcoded point to touch
 
         self.lam = 10
 
@@ -313,7 +313,7 @@ def main(args=None):
     rclpy.init(args=args)
 
     # Instantiate the Trajectory node.
-    node = TrajectoryNode('Goals2', Trajectory)
+    node = TrajectoryNode('Goals3', Trajectory)
 
     # Spin the node until interrupted.
     rclpy.spin(node)
