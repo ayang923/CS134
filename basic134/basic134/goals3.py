@@ -89,7 +89,7 @@ class TrajectoryNode(Node):
 
     # Called repeatedly by incoming messages - do nothing for now
     def recvfbk(self, fbkmsg):
-        self.actpos = list(fbkmsg.position)
+        self.actpos = np.array(list(fbkmsg.position)).reshape(-1, 1)
 
     # Shutdown
     def shutdown(self):
@@ -121,7 +121,7 @@ class TrajectoryNode(Node):
     def update(self):
         self.t = self.get_time()
          # Compute the desired joint positions and velocities for this time.
-        desired = self.trajectory.evaluate(self.t, 1 / RATE)
+        desired = self.trajectory.evaluate(self.actpos, self.t, 1 / RATE)
         if desired is None:
             self.future.set_result("Trajectory has ended")
             return
@@ -146,13 +146,13 @@ class TrajectoryNode(Node):
     def gravitycomp(self, q):
         tau_shoulder = -1.6 * np.sin(q[1])
         tau_elbow = -0.1 * np.sin(q[1] + q[2])
-        return [0.0, tau_shoulder, tau_elbow]
+        return [0.0, tau_shoulder[0], tau_elbow[0]]
 
     # Send a command - called repeatedly by the timer.
     def sendcmd(self):
         # Build up the message and publish.
         (q, qdot) = self.update()
-        effort = [0.0, 0.0, 0.0] #self.gravitycomp(self.actpos)
+        effort = self.gravitycomp(self.actpos)
         self.cmdmsg.header.stamp = self.get_clock().now().to_msg()
         self.cmdmsg.name         = self.jointnames
         self.cmdmsg.position     = q
@@ -259,12 +259,12 @@ class Trajectory():
 
         self.x = self.p0 # current state pos
 
-        self.table_point = np.array([-0.6, 0.35, 0.0]).reshape(-1,1) # hardcoded point to touch
-
         self.lam = 10
 
+        self.table_pos = np.array([0.1, 0.4, 0.0]).reshape(-1, 1)
+
         self.state_handler = StateHandler(State.INIT, self)
-        self.state_queue = [(State.ACTION, self.table_point), (State.INIT, None)]
+        self.state_queue = [(State.ACTION, self.table_pos), (State.INIT, None)]
 
     # Declare the joint names.
     def jointnames(self):
@@ -272,7 +272,7 @@ class Trajectory():
         return chainjointnames
 
     # Evaluate at the given time.
-    def evaluate(self, t, dt):
+    def evaluate(self, actpos, t, dt):
         # Compute the joint values.
         #if   self.state == State.INIT: return self.evaluate_init(t, dt)
         # self.q, qdot = self.state_trajectory.evaluate(t, dt, self.q)
@@ -298,10 +298,19 @@ class Trajectory():
 
         self.q, qdot = self.state_handler.get_evaluator()(t, dt)
         self.x, _, _, _ = self.chain.fkin(self.q)
+        actx, _, _, _ = self.chain.fkin(actpos)
+
+        if (self.state_handler.state == State.ACTION and
+            np.linalg.norm(actx - self.x) > 0.03):
+                print("COLLISION DETECTED!\nActual: {}\nExpected: {}".
+                      format(actx, self.x), flush=True)
+                self.state_handler.state_object.done = True
+
         if self.state_queue:
             head_el = self.state_queue[0]
             if self.state_handler.set_state(head_el[0], t, head_el[1]):
                 self.state_queue.pop(0)
+        
         # Return the position and velocity as flat python lists!
         return (self.q.flatten().tolist(), qdot.flatten().tolist())
 
