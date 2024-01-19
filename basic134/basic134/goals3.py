@@ -89,7 +89,7 @@ class TrajectoryNode(Node):
 
     # Called repeatedly by incoming messages - do nothing for now
     def recvfbk(self, fbkmsg):
-        self.actpos = np.array(list(fbkmsg.position)).reshape(-1, 1)
+        self.actpos = list(fbkmsg.position)
 
     # Shutdown
     def shutdown(self):
@@ -145,19 +145,18 @@ class TrajectoryNode(Node):
     
     def gravitycomp(self, q):
         tau_shoulder = -1.6 * np.sin(q[1])
-        tau_elbow = -0.1 * np.sin(q[1] + q[2])
-        return [0.0, tau_shoulder[0], tau_elbow[0]]
+        return tau_shoulder
 
     # Send a command - called repeatedly by the timer.
     def sendcmd(self):
         # Build up the message and publish.
         (q, qdot) = self.update()
-        effort = self.gravitycomp(self.actpos)
+        tau_shoulder = self.gravitycomp(self.actpos)
         self.cmdmsg.header.stamp = self.get_clock().now().to_msg()
         self.cmdmsg.name         = self.jointnames
         self.cmdmsg.position     = q
         self.cmdmsg.velocity     = qdot
-        self.cmdmsg.effort       = effort
+        self.cmdmsg.effort       = [0.0, tau_shoulder, 0.0]
         self.cmdpub.publish(self.cmdmsg)
 
 class InitState():
@@ -208,7 +207,7 @@ class ActionState():
             J = Jv
             xdotd = vd
 
-            J_Winv = np.transpose(J)@np.linalg.inv(J@np.transpose(J) + (0.3**2)*np.eye(3))
+            J_Winv = np.transpose(J)@np.linalg.inv(J@np.transpose(J) + 0.1 * np.eye(3))
 
             qdot = J_Winv@(xdotd + e*self.trajectory.lam)
 
