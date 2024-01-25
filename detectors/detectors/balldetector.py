@@ -18,7 +18,7 @@ import cv_bridge
 
 from rclpy.node         import Node
 from sensor_msgs.msg    import Image
-
+from geometry_msgs.msg  import Point
 
 #
 #  Detector Node Class
@@ -35,9 +35,9 @@ class DetectorNode(Node):
     def __init__(self, name):
         # Initialize the node, naming it as specified
         super().__init__(name)
-
+        CHECKER_LIMITS = np.array(([80, 120], [175, 255], [100, 220]))
         # Thresholds in Hmin/max, Smin/max, Vmin/max
-        self.hsvlimits = np.array([[20, 30], [90, 170], [60, 255]])
+        self.hsvlimits = CHECKER_LIMITS
 
         # Create a publisher for the processed (debugging) images.
         # Store up to three images, just in case.
@@ -74,8 +74,8 @@ class DetectorNode(Node):
         frame = self.bridge.imgmsg_to_cv2(msg, "passthrough")
 
         # Convert to HSV
-        hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
-        # hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
+        #hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
 
         # Grab the image shape, determine the center pixel.
         (H, W, D) = frame.shape
@@ -83,7 +83,7 @@ class DetectorNode(Node):
         vc = H//2
 
         # Help to determine the HSV range...
-        if True:
+        if False:
             # Draw the center lines.  Note the row is the first dimension.
             frame = cv2.line(frame, (uc,0), (uc,H-1), self.white, 1)
             frame = cv2.line(frame, (0,vc), (W-1,vc), self.white, 1)
@@ -122,6 +122,8 @@ class DetectorNode(Node):
             ur     = int(ur)
             vr     = int(vr)
             radius = int(radius)
+
+            self.pub
 
             # Draw the circle (yellow) and centroid (red) on the
             # original image.

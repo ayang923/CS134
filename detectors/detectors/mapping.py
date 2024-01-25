@@ -135,7 +135,7 @@ class DemoNode(Node):
 
         # Assume the center of marker sheet is at the world origin.
         x0 = 0.0
-        y0 = 0.0
+        y0 = 0.476
 
         # Convert the center of the image into world coordinates.
         xyCenter = self.pixelToWorld(image, uc, vc, x0, y0)

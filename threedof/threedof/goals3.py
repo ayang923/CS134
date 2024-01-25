@@ -14,6 +14,7 @@ from basic134.TrajectoryUtils import goto, goto5
 from basic134.TransformHelpers import *
 
 from basic134.KinematicChain import KinematicChain
+from sensor_msgs.msg    import Image
 
 from enum import Enum
 
@@ -21,7 +22,7 @@ from enum import Enum
 #
 #   Definitions
 #
-RATE = 100.0            # Hertz
+RATE = 100      # Hertz
 
 chainjointnames = ['base', 'shoulder', 'elbow']
 
@@ -39,6 +40,8 @@ class TrajectoryNode(Node):
         # Initialize the node, naming it as specified
         super().__init__(name)
 
+        self.pub_strip = self.create_publisher(Image, name+'/binary',    3)
+
         self.fbksub = self.create_subscription(
             Point, '/point', self.recvpoint, 10)        
 
@@ -52,7 +55,7 @@ class TrajectoryNode(Node):
 
         # Create a message and publisher to send the joint commands.
         self.cmdmsg = JointState()
-        self.cmdpub = self.create_publisher(JointState, '/joint_commands', 100) # /joint_commands publisher
+        self.cmdpub = self.create_publisher(JointState, '/joint_commands', 10) # /joint_commands publisher
 
         # Wait for a connection to happen.  This isn't necessary, but
         # means we don't start until the rest of the system is ready.
@@ -62,14 +65,14 @@ class TrajectoryNode(Node):
 
         # Create a subscriber to continually receive joint state messages.
         self.fbksub = self.create_subscription(
-            JointState, '/joint_states', self.recvfbk, 100) # /joint_states subscriber (from Hebi!)
+            JointState, '/joint_states', self.recvfbk, RATE) # /joint_states subscriber (from Hebi!)
 
         # Create a timer to keep calculating/sending commands.
         rate       = RATE
         self.timer = self.create_timer(1/rate, self.sendcmd)
         self.get_logger().info("Sending commands with dt of %f seconds (%fHz)" %
                                (self.timer.timer_period_ns * 1e-9, rate))
-        self.start_time = 1e-9 * self.get_clock().now().nanoseconds
+        self.start_time = None #1e-9 * self.get_clock().now().nanoseconds
 
     def recvpoint(self, pointmsg):
         # Extract the data.
@@ -115,6 +118,8 @@ class TrajectoryNode(Node):
         return self.grabpos
 
     def get_time(self):
+        if not self.start_time:
+            self.start_time = 1e-9 * self.get_clock().now().nanoseconds
         return 1e-9 * self.get_clock().now().nanoseconds - self.start_time
 
     # Receive new command update from trajectory - called repeatedly by incoming messages.
@@ -156,7 +161,7 @@ class TrajectoryNode(Node):
         self.cmdmsg.name         = self.jointnames
         self.cmdmsg.position     = q
         self.cmdmsg.velocity     = qdot
-        self.cmdmsg.effort       = [0.0, tau_shoulder, 0.0]
+        self.cmdmsg.effort       = [0.0, 0.0, 0.0]
         self.cmdpub.publish(self.cmdmsg)
 
 class InitState():
@@ -261,12 +266,11 @@ class Trajectory():
         self.q0 = np.array(q0).reshape(-1,1)
         self.q1 = np.array([q0[0], 0.0, q0[2]]).reshape(-1,1)
         self.q2 = np.array([0.0, 0.0, np.pi/2]).reshape(-1,1) # upright with elbow at 90, pointing fwd
+        
+        
         self.q = self.q0
+        self.pd, _, _, _ = self.chain.fkin(self.q0) # current state pos
 
-
-        (self.p0, _, _, _) = self.chain.fkin(self.q2) # initial pos/Rot
-
-        self.x = self.p0 # current state pos
 
         self.lam = 10
 
@@ -283,42 +287,54 @@ class Trajectory():
     # Evaluate at the given time.
     def evaluate(self, actpos, t, dt):
         # Compute the joint values.
-        #if   self.state == State.INIT: return self.evaluate_init(t, dt)
-        # self.q, qdot = self.state_trajectory.evaluate(t, dt, self.q)
-        # elif (t < 12.0):
-        #     if (t < 9.0):
-        #         (pd, vd) = goto5(t-6, 3.0, self.p0, self.table_point) # task spline
-        #     else:
-        #         (pd, vd) = goto5(t-9, 3.0, self.table_point, self.p0) # task spline
-            
+        if   (t < 3.0): (self.q, qdot) = goto(t, 3.0, self.q0, self.q1)
+        elif (t < 6.0): (self.q, qdot) = goto(t-3, 3.0, self.q1, self.q2)
+        elif (t < 12.0):
+            if (t < 9.0):
+                (pd, vd) = goto(t-6, 3.0, self.p0, self.table_pos)
+            else:
+                (pd, vd) = goto(t-9, 3.0, self.table_pos, self.p0)
+            # Grab the last joint value and desired orientation.
+            qlast  = self.q
+            pdlast = self.pd
+            #Rdlast = self.Rd
 
-        #     (self.x, _, Jv, _) = self.chain.fkin(self.q)
+            # Compute the old forward kinematics.
+            (p, R, Jv, Jw) = self.chain.fkin(qlast)
 
-        #     e = ep(pd, self.x)
-        #     J = Jv
-        #     xdotd = vd
+            # Compute the inverse kinematics
+            vr    = vd + self.lam * ep(pdlast, p)
+            #wr    = wd + self.lam * eR(Rdlast, R)
+            J     = Jv
+            xrdot = vr
+            qdot  = np.linalg.inv(J) @ xrdot
 
-        #     qdot = np.linalg.inv(J)@(xdotd + e*self.lam)
+            # Integrate the joint position.
+            q = qlast + dt * qdot
 
-        #     self.q = self.q + qdot*dt
+            # Save the joint value and desired values for next cycle.
+            self.q  = q
+            self.pd = pd
+            #self.Rd = Rd
+        else:
+            qdot = np.zeros((3, 1))
 
-        # else:
-        #     qdot = np.zeros((3, 1))
 
-        self.q, qdot = self.state_handler.get_evaluator()(t, dt)
-        self.x, _, _, _ = self.chain.fkin(self.q)
-        actx, _, _, _ = self.chain.fkin(actpos)
 
-        if (self.state_handler.state == State.ACTION and
-            np.linalg.norm(actx - self.x) > 0.03):
-                print("COLLISION DETECTED!\nActual: {}\nExpected: {}".
-                      format(actx, self.x), flush=True)
-                self.state_handler.state_object.done = True
+        # actx, _, _, _ = self.chain.fkin(actpos)
+        # self.q, qdot = self.state_handler.get_evaluator()(t, dt)
+        # #self.x, _, _, _ = self.chain.fkin(self.q)
 
-        if self.state_queue:
-            head_el = self.state_queue[0]
-            if self.state_handler.set_state(head_el[0], t, head_el[1]):
-                self.state_queue.pop(0)
+        # if (self.state_handler.state == State.ACTION and
+        #     np.linalg.norm(actx - self.x) > 0.03):
+        #         print("COLLISION DETECTED!\nActual: {}\nExpected: {}".
+        #               format(actx, self.x), flush=True)
+        #         self.state_handler.state_object.done = True
+
+        # if self.state_queue:
+        #     head_el = self.state_queue[0]
+        #     if self.state_handler.set_state(head_el[0], t, head_el[1]):
+        #         self.state_queue.pop(0)
         
         # Return the position and velocity as flat python lists!
         return (self.q.flatten().tolist(), qdot.flatten().tolist())

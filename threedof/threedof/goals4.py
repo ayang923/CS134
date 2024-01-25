@@ -7,15 +7,19 @@
 import numpy as np
 import rclpy
 
+import cv2, cv_bridge
+
 from rclpy.node         import Node
-from sensor_msgs.msg    import JointState
+from sensor_msgs.msg    import JointState, Image
+from geometry_msgs.msg  import Point, Pose, Quaternion
 
-from basic134.TrajectoryUtils import goto, goto5
-from basic134.TransformHelpers import *
+from threedof.TrajectoryUtils import goto, goto5
+from threedof.TransformHelpers import *
 
-from basic134.KinematicChain import KinematicChain
+from threedof.KinematicChain import KinematicChain
 
 from enum import Enum
+from scipy.linalg import diagsvd
 
 
 #
@@ -39,8 +43,19 @@ class TrajectoryNode(Node):
         # Initialize the node, naming it as specified
         super().__init__(name)
 
-        self.fbksub = self.create_subscription(
-            Point, '/point', self.recvpoint, 10)        
+        self.pub_strip = self.create_publisher(Image, '/goals4/binary',    3)
+
+        self.pubpoints = self.create_publisher(Point, '/point', 3)
+        self.rcvpoints = self.create_subscription(Point, '/point',
+                                                  self.recvpoint, 3)
+        
+        self.pubposes = self.create_publisher(Pose, '/pose', 3)
+        self.rcvposes = self.create_subscription(Pose, '/pose', self.recvposes, 3)
+        
+        self.checker_limits = np.array(([80, 120], [175, 255], [170, 220]))
+        self.strip_limits = np.array(([80, 120], [120, 180], [170, 255]))
+        
+        self.bridge = cv_bridge.CvBridge()
 
         # Create a temporary subscriber to grab the initial position.
         self.position0 = self.grabfbk()
@@ -54,6 +69,9 @@ class TrajectoryNode(Node):
         self.cmdmsg = JointState()
         self.cmdpub = self.create_publisher(JointState, '/joint_commands', 100) # /joint_commands publisher
 
+        self.rcvimages = self.create_subscription(Image, '/usb_cam/image_raw',
+                                                  self.process, 1)
+
         # Wait for a connection to happen.  This isn't necessary, but
         # means we don't start until the rest of the system is ready.
         self.get_logger().info("Waiting for a /joint_commands subscriber...")
@@ -61,8 +79,8 @@ class TrajectoryNode(Node):
             pass
 
         # Create a subscriber to continually receive joint state messages.
-        self.fbksub = self.create_subscription(
-            JointState, '/joint_states', self.recvfbk, 100) # /joint_states subscriber (from Hebi!)
+        self.fbksub = self.create_subscription(JointState, '/joint_states',
+                                               self.recvfbk, 100)
 
         # Create a timer to keep calculating/sending commands.
         rate       = RATE
@@ -72,6 +90,9 @@ class TrajectoryNode(Node):
         self.start_time = 1e-9 * self.get_clock().now().nanoseconds
 
     def recvpoint(self, pointmsg):
+        if not self.trajectory.state_handler.state_object.done:
+            self.get_logger().info("in motion")
+            return
         # Extract the data.
         x = pointmsg.x
         y = pointmsg.y
@@ -85,7 +106,25 @@ class TrajectoryNode(Node):
             self.get_logger().info("Input near / outside workspace!")
         
         # Report.
-        self.trajectory.state_queue += [(State.ACTION, point), (State.INIT, None)]
+        self.trajectory.state_queue += [(State.ACTION, [point, 5]), (State.INIT, [])]
+    
+    def recvposes(self, posemsg):
+        if not self.trajectory.state_handler.state_object.done:
+            self.get_logger().info("in motion")
+            return
+        
+        T = T_from_Pose(posemsg)
+
+        p = p_from_T(T)
+        R = R_from_T(T)
+
+        pos_side_p =  p + (R@ex()*0.013)
+        neg_side_p = p + (R@ex()*-0.013)
+
+
+        self.trajectory.state_queue += [(State.ACTION, [pos_side_p, 5]), (State.ACTION, [pos_side_p + ez()*0.02, 1]), (State.ACTION, [neg_side_p, 1]), (State.INIT, [])]
+
+        self.get_logger().info(f"{R @ np.array([1, 0, 0]).reshape(-1, 1)}")
 
     # Called repeatedly by incoming messages - do nothing for now
     def recvfbk(self, fbkmsg):
@@ -159,6 +198,125 @@ class TrajectoryNode(Node):
         self.cmdmsg.effort       = [0.0, tau_shoulder, 0.0]
         self.cmdpub.publish(self.cmdmsg)
 
+    def process(self, msg):
+        # Confirm the encoding and report.
+        assert(msg.encoding == "rgb8")
+        # self.get_logger().info(
+        #     "Image %dx%d, bytes/pixel %d, encoding %s" %
+        #     (msg.width, msg.height, msg.step/msg.width, msg.encoding))
+
+        # Convert into OpenCV image, using RGB 8-bit (pass-through).
+        frame = self.bridge.imgmsg_to_cv2(msg, "passthrough")
+
+        # Convert to HSV
+        #hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
+
+        # Threshold in Hmin/max, Smin/max, Vmin/max
+        binary_strip = cv2.inRange(hsv, self.checker_limits[:, 0], self.checker_limits[:, 1])
+        binary_checker = cv2.inRange(hsv, self.strip_limits[:,0], self.strip_limits[:,1])
+        binary = cv2.bitwise_or(binary_checker, binary_strip)
+
+        self.pub_strip.publish(self.bridge.cv2_to_imgmsg(binary))
+
+        # Erode and Dilate. Definitely adjust the iterations!
+        iter = 4
+        binary = cv2.erode( binary, None, iterations=iter)
+        binary = cv2.dilate(binary, None, iterations=2*iter)
+        binary = cv2.erode( binary, None, iterations=iter)
+
+        # Find contours in the mask and initialize the current
+        # (x, y) center of the ball
+        (contours, hierarchy) = cv2.findContours(
+            binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Only proceed if at least one contour was found.  You may
+        # also want to loop over the contours...
+        if len(contours) > 0:
+            # Pick the largest contour.
+            contour = max(contours, key=cv2.contourArea)
+            x0, y0 = 0.007, 0.476
+
+            ((ur, vr), (w, h), theta) = cv2.minAreaRect(contour)
+            xy = self.pixelToWorld(frame, ur, vr, x0, y0)
+
+            #self.get_logger().info(f"{theta}")
+
+            if xy is not None:
+                (x, y) = xy
+                point_msg = Point()
+                point_msg.x = float(x)
+                point_msg.y = float(y)
+                point_msg.z = 0.005
+                
+                if 0.5 <= w/h <= 2:
+                    self.pubpoints.publish(point_msg)
+                else:
+                    pose_msg = Pose()
+                    pose_msg.position = point_msg
+
+                    quart_msg = Quaternion()
+                    quart_msg.x = 0.0
+                    quart_msg.y = 0.0
+                    quart_msg.z = np.sin(theta/2)
+                    quart_msg.w = np.cos(theta/2)
+                    pose_msg.orientation = quart_msg
+
+                    self.pubposes.publish(pose_msg)
+
+                
+    
+    # Pixel Conversion
+    def pixelToWorld(self, image, u, v, x0, y0, annotateImage=True):
+        '''
+        Convert the (u,v) pixel position into (x,y) world coordinates
+        Inputs:
+          image: The image as seen by the camera
+          u:     The horizontal (column) pixel coordinate
+          v:     The vertical (row) pixel coordinate
+          x0:    The x world coordinate in the center of the marker paper
+          y0:    The y world coordinate in the center of the marker paper
+          annotateImage: Annotate the image with the marker information
+
+        Outputs:
+          point: The (x,y) world coordinates matching (u,v), or None
+
+        Return None for the point if not all the Aruco markers are detected
+        '''
+
+        # Detect the Aruco markers (using the 4X4 dictionary).
+        markerCorners, markerIds, _ = cv2.aruco.detectMarkers(
+            image, cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50))
+        if annotateImage:
+            cv2.aruco.drawDetectedMarkers(image, markerCorners, markerIds)
+
+        # Abort if not all markers are detected.
+        if (markerIds is None or len(markerIds) != 4 or
+            set(markerIds.flatten()) != set([1,2,3,4])):
+            return None
+
+
+        # Determine the center of the marker pixel coordinates.
+        uvMarkers = np.zeros((4,2), dtype='float32')
+        for i in range(4):
+            uvMarkers[markerIds[i]-1,:] = np.mean(markerCorners[i], axis=1)
+
+        # Calculate the matching World coordinates of the 4 Aruco markers.
+        DX = 0.1016
+        DY = 0.06985
+        xyMarkers = np.float32([[x0+dx, y0+dy] for (dx, dy) in
+                                [(-DX, DY), (DX, DY), (-DX, -DY), (DX, -DY)]])
+
+
+        # Create the perspective transform.
+        M = cv2.getPerspectiveTransform(uvMarkers, xyMarkers)
+
+        # Map the object in question.
+        uvObj = np.float32([u, v])
+        xyObj = cv2.perspectiveTransform(uvObj.reshape(1,1,2), M).reshape(2)
+
+        return xyObj
+
 class InitState():
     def __init__(self, t, trajectory, initial = True):
         self.start = t
@@ -173,7 +331,7 @@ class InitState():
         self.done = np.linalg.norm(self.q2 - self.q0) < 0.1
 
     def evaluate(self, t, dt):
-        t = t - self.start
+        t = t - self.start - dt
         if self.done:
             return self.trajectory.q, np.zeros((3, 1))
         elif (t < 3.0):
@@ -185,8 +343,8 @@ class InitState():
             return self.trajectory.q, np.zeros((3, 1))
 
 class ActionState():
-    def __init__(self, t, trajectory, x_t):
-        self.start = t
+    def __init__(self, t, trajectory, x_t, T):
+        self.start = None
         self.trajectory = trajectory
         
         self.q0 = self.trajectory.q
@@ -194,22 +352,19 @@ class ActionState():
         self.fakeq = self.q0
         self.fakex = self.p0
 
+        self.T = T
+
         self.x_t = x_t
         self.done = False
 
     def evaluate(self, t, dt):
+        if not self.start:
+            self.start = t
+
         t = t - self.start
 
-        if t < 5.0:
-            '''for i in np.arange(50):
-                (fakepd, fakevd) = goto5(i,49,self.p0,self.x_t)
-                (self.fakex, _, fakej, _) = self.trajectory.chain.fkin(self.fakeq)
-                e = ep(fakepd,self.fakex)
-                J_Winv = np.transpose(fakej)@np.linalg.inv(fakej@np.transpose(fakej) + 0.1 * np.eye(3))
-                fakeqdot = J_Winv@(fakevd + e*self.trajectory.lam)
-                self.fakeq = self.fakeq + fakeqdot
-            (q, qdot) = goto5(t, 5.0, self.q0, self.fakeq)'''
-            (pd, vd) = goto5(t, 5.0, self.p0, self.x_t)
+        if t < self.T:
+            (pd, vd) = goto5(t, self.T, self.p0, self.x_t)
 
             (self.trajectory.x, _, Jv, _) = self.trajectory.chain.fkin(self.trajectory.q)
 
@@ -217,9 +372,17 @@ class ActionState():
             J = Jv
             xdotd = vd
 
-            J_Winv = np.transpose(J)@np.linalg.inv(J@np.transpose(J) + 0.1 * np.eye(3))
+            gamma = 0.1
+            U, S, V = np.linalg.svd(Jv)
 
-            qdot = J_Winv@(xdotd + e*self.trajectory.lam)
+            msk = np.abs(S) >= gamma
+            S_inv = np.zeros(len(S))
+            S_inv[msk] = 1/S[msk]
+            S_inv[~msk] = S[~msk]/gamma**2
+
+            J_inv = V.T @ diagsvd(S_inv, *J.T.shape) @ U.T
+
+            qdot = J_inv@(xdotd + self.trajectory.lam * e)
 
             q = self.trajectory.q + qdot*dt
 
@@ -270,10 +433,8 @@ class Trajectory():
 
         self.lam = 10
 
-        self.table_pos = np.array([0.1, 0.4, 0.0]).reshape(-1, 1)
-
         self.state_handler = StateHandler(State.INIT, self)
-        self.state_queue = [(State.ACTION, self.table_pos), (State.INIT, None)]
+        self.state_queue = []
 
     # Declare the joint names.
     def jointnames(self):
@@ -282,42 +443,20 @@ class Trajectory():
 
     # Evaluate at the given time.
     def evaluate(self, actpos, t, dt):
-        # Compute the joint values.
-        #if   self.state == State.INIT: return self.evaluate_init(t, dt)
-        # self.q, qdot = self.state_trajectory.evaluate(t, dt, self.q)
-        # elif (t < 12.0):
-        #     if (t < 9.0):
-        #         (pd, vd) = goto5(t-6, 3.0, self.p0, self.table_point) # task spline
-        #     else:
-        #         (pd, vd) = goto5(t-9, 3.0, self.table_point, self.p0) # task spline
-            
-
-        #     (self.x, _, Jv, _) = self.chain.fkin(self.q)
-
-        #     e = ep(pd, self.x)
-        #     J = Jv
-        #     xdotd = vd
-
-        #     qdot = np.linalg.inv(J)@(xdotd + e*self.lam)
-
-        #     self.q = self.q + qdot*dt
-
-        # else:
-        #     qdot = np.zeros((3, 1))
-
-        self.q, qdot = self.state_handler.get_evaluator()(t, dt)
         self.x, _, _, _ = self.chain.fkin(self.q)
         actx, _, _, _ = self.chain.fkin(actpos)
+        self.q, qdot = self.state_handler.get_evaluator()(t, dt)
+
 
         if (self.state_handler.state == State.ACTION and
-            np.linalg.norm(actx - self.x) > 0.03):
+            np.linalg.norm(actx - self.x) > 0.0254):
                 print("COLLISION DETECTED!\nActual: {}\nExpected: {}".
                       format(actx, self.x), flush=True)
                 self.state_handler.state_object.done = True
 
         if self.state_queue:
             head_el = self.state_queue[0]
-            if self.state_handler.set_state(head_el[0], t, head_el[1]):
+            if self.state_handler.set_state(head_el[0], t, *head_el[1]):
                 self.state_queue.pop(0)
         
         # Return the position and velocity as flat python lists!
