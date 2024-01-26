@@ -52,8 +52,8 @@ class TrajectoryNode(Node):
         self.pubposes = self.create_publisher(Pose, '/pose', 3)
         self.rcvposes = self.create_subscription(Pose, '/pose', self.recvposes, 3)
         
-        self.checker_limits = np.array(([80, 120], [175, 255], [170, 220]))
-        self.strip_limits = np.array(([80, 120], [120, 180], [170, 255]))
+        self.checker_limits = np.array(([80, 120], [175, 255], [175, 255]))
+        self.strip_limits = np.array(([80, 120], [110, 150], [175, 255]))
         
         self.bridge = cv_bridge.CvBridge()
 
@@ -235,7 +235,7 @@ class TrajectoryNode(Node):
         if len(contours) > 0:
             # Pick the largest contour.
             contour = max(contours, key=cv2.contourArea)
-            x0, y0 = 0.007, 0.476
+            x0, y0 = 0.007, 0.477
 
             ((ur, vr), (w, h), theta) = cv2.minAreaRect(contour)
             xy = self.pixelToWorld(frame, ur, vr, x0, y0)
@@ -247,6 +247,9 @@ class TrajectoryNode(Node):
                 point_msg = Point()
                 point_msg.x = float(x)
                 point_msg.y = float(y)
+                # Naci Note here: I was checking rviz while running this and also sending node commands.
+                # I think we have a small error with our z height recognition, thus I am changing the 
+                # z value here. 
                 point_msg.z = 0.005
                 
                 if 0.5 <= w/h <= 2:

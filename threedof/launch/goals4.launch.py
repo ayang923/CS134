@@ -83,7 +83,7 @@ def generate_launch_description():
                       {'auto_white_balance':  False},
                       {'white_balance':       4000},
                       {'autoexposure':        False},
-                      {'exposure':            250},
+                      {'exposure':            30},
                       {'autofocus':           False},
                       {'focus':               -1}])
 
