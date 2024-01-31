@@ -11,140 +11,29 @@ from sixdof.TrajectoryUtils import goto, goto5
 from sixdof.TransformHelpers import *
 
 from sixdof.states import Tasks, TaskHandler
+from sixdof.nodes import TrajectoryNode, DetectorNode
 
 from enum import Enum
-
-RATE = 100.0            # Hertz
-JOINT_NAMES = ['base', 'shoulder', 'elbow']
-
-
-class TrajectoryNode(Node):
-    # Initialization.
-    def __init__(self, name):
-        # Initialize the node, naming it as specified
-        super().__init__(name)
-
-        self.jointnames = JOINT_NAMES
-
-        # Create a temporary subscriber to grab the initial position.
-        self.position0 = self.grabfbk()
-        self.actpos = self.position0
-        self.get_logger().info("Initial positions: %r" % self.position0)
-
-        # Create a message and publisher to send the joint commands.
-        self.cmdmsg = JointState()
-        self.cmdpub = self.create_publisher(JointState, '/joint_commands', 100) # /joint_commands publisher
-
-        # Wait for a connection to happen.  This isn't necessary, but
-        # means we don't start until the rest of the system is ready.
-        self.get_logger().info("Waiting for a /joint_commands subscriber...")
-        while(not self.count_subscribers('/joint_commands')):
-            pass
-
-        # Create a subscriber to continually receive joint state messages.
-        self.fbksub = self.create_subscription(JointState, '/joint_states',
-                                               self.recvfbk, 100)
-
-        # creates task handler for robot
-        self.task_handler = TaskHandler(self, np.array(self.position0).reshape(-1, 1))
-        self.task_handler.add_state(Tasks.INIT)
-        self.task_handler.add_state(Tasks.TASK_SPLINE, x_final=np.array([-0.5482, 0.265, 0.000]).reshape(-1, 1))
-
-        # Create a timer to keep calculating/sending commands.
-        rate       = RATE
-        self.timer = self.create_timer(1/rate, self.sendcmd)
-        self.get_logger().info("Sending commands with dt of %f seconds (%fHz)" %
-                               (self.timer.timer_period_ns * 1e-9, rate))
-        self.start_time = 1e-9 * self.get_clock().now().nanoseconds
-
-
-
-    # Called repeatedly by incoming messages - do nothing for now
-    def recvfbk(self, fbkmsg):
-        self.actpos = list(fbkmsg.position)
-
-    # Shutdown
-    def shutdown(self):
-        # No particular cleanup, just shut down the node.
-        self.timer.destroy()
-        self.destroy_node()
-        
-    # Grab a single feedback - do not call this repeatedly.
-    def grabfbk(self):
-        # Create a temporary handler to grab the position.
-        def cb(fbkmsg):
-            self.grabpos   = list(fbkmsg.position)
-            self.grabready = True
-
-        # Temporarily subscribe to get just one message.
-        sub = self.create_subscription(JointState, '/joint_states', cb, 1)
-        self.grabready = False
-        while not self.grabready:
-            rclpy.spin_once(self)
-        self.destroy_subscription(sub)
-
-        # Return the values.
-        return self.grabpos
-
-    def get_time(self):
-        return 1e-9 * self.get_clock().now().nanoseconds - self.start_time
-
-    # Receive new command update from trajectory - called repeatedly by incoming messages.
-    def update(self):
-        self.t = self.get_time()
-         # Compute the desired joint positions and velocities for this time.
-        desired = self.task_handler.evaluate_task(self.t, 1 / RATE)
-        if desired is None:
-            self.future.set_result("Trajectory has ended")
-            return
-        (q, qdot) = desired
-        
-        # Check the results.
-        if not (isinstance(q, list) and isinstance(qdot, list)):
-            self.get_logger().warn("(q) and (qdot) must be python lists!")
-            return
-        if not (len(q) == len(self.jointnames)):
-            self.get_logger().warn("(q) must be same length as jointnames!")
-            return
-        if not (len(q) == len(qdot)):
-            self.get_logger().warn("(qdot) must be same length as (q)!")
-            return
-        if not (isinstance(q[0], float) and isinstance(qdot[0], float)):
-            self.get_logger().warn("Flatten NumPy arrays before making lists!")
-            return
-            
-        return (q, qdot)
-    
-    def gravitycomp(self, q):
-        tau_shoulder = -1.3 * np.sin(q[1])
-        return tau_shoulder
-
-    # Send a command - called repeatedly by the timer.
-    def sendcmd(self):
-        # Build up the message and publish.
-        (q, qdot) = self.update()
-        tau_shoulder = self.gravitycomp(self.actpos)
-        self.cmdmsg.header.stamp = self.get_clock().now().to_msg()
-        self.cmdmsg.name         = self.jointnames
-        self.cmdmsg.position     = q
-        self.cmdmsg.velocity     = qdot
-        self.cmdmsg.effort       = [0.0, tau_shoulder, 0.0]
-        self.cmdpub.publish(self.cmdmsg)
-
 
 def main(args=None):
     # Initialize ROS.
     rclpy.init(args=args)
 
     # Instantiate the Trajectory node.
-    node = TrajectoryNode('main')
+    traj_node = TrajectoryNode('traj')
+    detect_node = DetectorNode("detect")
 
+    executor = rclpy.executors.MultiThreadedExecutor()
+    executor.add_node(traj_node)
+    executor.add_node(detect_node)
     # Spin the node until interrupted.
-    rclpy.spin(node)
+    executor.spin()
 
     # Shutdown the node and ROS.
-    node.shutdown()
     rclpy.shutdown()
+    traj_node.destroy_node()
+    detect_node.destroy_node()
+    executor.shutdown()
 
 if __name__ == "__main__":
     main()
