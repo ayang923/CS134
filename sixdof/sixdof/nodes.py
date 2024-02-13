@@ -198,12 +198,27 @@ class DetectorNode(Node):
         #hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
 
+        grayscale = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(grayscale, (5, 5), 0)
+        params = cv2.SimpleBlobDetector_Params()
+        # Change thresholds
+        params.minThreshold = 0    # the graylevel of images
+        params.maxThreshold = 75
+
+        binary_msk_die = cv2.inRange(blurred, 0, 75)
+
+        detector = cv2.SimpleBlobDetector_create(params)
+        keypoints = detector.detect(grayscale)
+        print(keypoints)
+
+        im_with_keypoints = cv2.drawKeypoints(frame, keypoints, np.array([]), (0, 0, 255), cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+
         # Threshold in Hmin/max, Smin/max, Vmin/max
         binary_strip = cv2.inRange(hsv, self.checker_limits[:, 0], self.checker_limits[:, 1])
         binary_checker = cv2.inRange(hsv, self.strip_limits[:,0], self.strip_limits[:,1])
         binary = cv2.bitwise_or(binary_checker, binary_strip)
 
-        self.pub_strip.publish(self.bridge.cv2_to_imgmsg(binary))
+        self.pub_strip.publish(self.bridge.cv2_to_imgmsg(im_with_keypoints, "rgb8"))
 
         # Erode and Dilate. Definitely adjust the iterations!
         iter = 4

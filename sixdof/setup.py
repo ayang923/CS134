@@ -26,6 +26,7 @@ setup(
     entry_points={
         'console_scripts': [
             'main       = sixdof.main:main',
+            'detectors       = sixdof.detectors:main'
         ],
     },
 )
