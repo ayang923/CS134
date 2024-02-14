@@ -70,8 +70,8 @@ def generate_launch_description():
         executable = 'hebinode',
         output     = 'screen',
         parameters = [{'family':   'robotlab'},
-                      {'motors':   ['6.3',  '6.5',      '6.4']},
-                      {'joints':   ['base', 'shoulder', 'elbow']},
+                      {'motors':   ['6.4',  '6.7', '6.5', '6.2', '6.1']},
+                      {'joints':   ['base', 'shoulder', 'elbow', 'wristpitch', 'wristroll']},
                       {'lifetime': 200.0}],
         on_exit    = Shutdown())
 
@@ -81,8 +81,8 @@ def generate_launch_description():
         executable = 'hebinode',
         output     = 'screen',
         parameters = [{'family':   'robotlab'},
-                      {'motors':   ['6.3',  '6.5',      '6.4']},
-                      {'joints':   ['base', 'shoulder', 'elbow']}],
+                      {'motors':   ['6.4',  '6.7', '6.5', '6.2', '6.1']},
+                      {'joints':   ['base', 'shoulder', 'elbow', 'wristpitch', 'wristroll']}],
         on_exit    = Shutdown())
 
     # Configure a node for the GUI to command the robot.

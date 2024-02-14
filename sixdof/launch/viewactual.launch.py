@@ -28,10 +28,10 @@ def generate_launch_description():
     # LOCATE FILES
 
     # Locate the RVIZ configuration file.
-    rvizcfg = os.path.join(pkgdir('basic134'), 'rviz/viewurdf.rviz')
+    rvizcfg = os.path.join(pkgdir('sixdof'), 'rviz/viewurdf.rviz')
 
     # Locate/load the robot's URDF file (XML).
-    urdf = os.path.join(pkgdir('basic134'), 'urdf/134threedof.urdf')
+    urdf = os.path.join(pkgdir('sixdof'), 'urdf/fivedof.urdf')
     with open(urdf, 'r') as file:
         robot_description = file.read()
 
@@ -72,8 +72,8 @@ def generate_launch_description():
         executable = 'hebinode',
         output     = 'screen',
         parameters = [{'family':   'robotlab'},
-                      {'motors':   ['6.3',  '6.5',      '6.4']},
-                      {'joints':   ['base', 'shoulder', 'elbow']},
+                      {'motors':   ['6.4',  '6.7', '6.5', '6.2', '6.1']},
+                      {'joints':   ['base', 'shoulder', 'elbow', 'wristpitch', 'wristroll']},
                       {'lifetime': 200.0}],
         on_exit    = Shutdown())
 
@@ -83,8 +83,8 @@ def generate_launch_description():
         executable = 'hebinode',
         output     = 'screen',
         parameters = [{'family':   'robotlab'},
-                      {'motors':   ['6.3',  '6.5',      '6.4']},
-                      {'joints':   ['base', 'shoulder', 'elbow']}],
+                      {'motors':   ['6.4', '6.7', '6.5', '6.2', '6.1']},
+                      {'joints':   ['base', 'shoulder', 'elbow', 'wristpitch', 'wristroll']}],
         on_exit    = Shutdown())
 
     # Configure a node for the GUI to command the robot.

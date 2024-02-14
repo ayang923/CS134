@@ -24,7 +24,7 @@ def generate_launch_description():
     rvizcfg = os.path.join(pkgdir('sixdof'), 'rviz/viewurdf.rviz')
 
     # Locate/load the robot's URDF file (XML).
-    urdf = os.path.join(pkgdir('sixdof'), 'urdf/134threedof.urdf')
+    urdf = os.path.join(pkgdir('sixdof'), 'urdf/fivedof.urdf')
     with open(urdf, 'r') as file:
         robot_description = file.read()
 
@@ -49,7 +49,6 @@ def generate_launch_description():
        arguments  = ['-d', rvizcfg],
        on_exit    = Shutdown())
 
-    # Configure a node for the hebi interface.
     node_hebi = Node(
         name       = 'hebi', 
         package    = 'hebiros',
@@ -57,9 +56,8 @@ def generate_launch_description():
         output     = 'screen',
         parameters = [{'testmode': 'off'},
                       {'family':   'robotlab'},
-                      {'motors':   ['6.3',  '6.5',      '6.4']},
-                      {'joints':   ['base', 'shoulder', 'elbow']},
-                    ],
+                      {'motors':   ['6.4',  '6.7', '6.5', '6.2', '6.1']},
+                      {'joints':   ['base', 'shoulder', 'elbow', 'wristpitch', 'wristroll']}],
         on_exit    = Shutdown())
 
     # Configure the USB camera node

@@ -16,6 +16,8 @@ from enum import Enum
 
 RATE = 100.0            # Hertz
 
+nan = float("nan")
+
 
 class TrajectoryNode(Node):
     # Initialization.
@@ -118,19 +120,26 @@ class TrajectoryNode(Node):
         return (q, qdot)
     
     def gravitycomp(self, q):
-        tau_shoulder = -1.3 * np.sin(q[1])
-        return tau_shoulder
+        A = -5.9
+        B = -0.5
+        C = 10.0
+        D = 0.0
+        tau_elbow =  A * np.sin(-q[1] + q[2]) + B * np.cos(-q[1] + q[2])
+        tau_shoulder = -tau_elbow + C * np.sin(-q[1]) + D * np.cos(-q[1])
+        return (tau_shoulder, tau_elbow)
 
     # Send a command - called repeatedly by the timer.
     def sendcmd(self):
         # Build up the message and publish.
         (q, qdot) = self.update()
-        tau_shoulder = self.gravitycomp(self.actpos)
+        (tau_shoulder, tau_elbow) = self.gravitycomp(self.actpos)
         self.cmdmsg.header.stamp = self.get_clock().now().to_msg()
         self.cmdmsg.name         = self.jointnames
-        self.cmdmsg.position     = q
+        #self.cmdmsg.position     = [nan, nan, nan, nan, nan] # uncomment for gravity comp test
+        #self.cmdmsg.velocity     = [nan, nan, nan, nan, nan]
+        self.cmdmsg.position     = q # comment for gravity comp
         self.cmdmsg.velocity     = qdot
-        self.cmdmsg.effort       = [0.0, tau_shoulder, 0.0]
+        self.cmdmsg.effort       = [0.0, tau_shoulder, tau_elbow, 0.0, 0.0]
         self.cmdpub.publish(self.cmdmsg)
 
 # class passed into trajectory node to handle game logic

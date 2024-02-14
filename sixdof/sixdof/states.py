@@ -6,7 +6,7 @@ from enum import Enum
 import numpy as np
 from scipy.linalg import diagsvd
 
-JOINT_NAMES = ['base', 'shoulder', 'elbow']
+JOINT_NAMES = ['base', 'shoulder', 'elbow', 'wristpitch', 'wristroll']
 
 class Tasks(Enum):
     INIT = 1
@@ -34,8 +34,8 @@ class InitTask(TaskObject):
     def __init__(self, start_time, task_manager):
         super().__init__(start_time, task_manager)
 
-        self.SHOULDER_UP = np.array([self.q0[0, 0], 0.0, self.q0[2, 0]]).reshape(-1,1)
-        self.ELBOW_UP = np.array([0.0, 0.0, np.pi/2]).reshape(-1,1)
+        self.SHOULDER_UP = np.array([self.q0[0, 0], 0.0, self.q0[2, 0], -np.pi/2, 0.0]).reshape(-1,1)
+        self.ELBOW_UP = np.array([0.0, 0.0, np.pi/2, -np.pi/2, 0.0]).reshape(-1,1)
 
         # check what needs to be done
         self.in_shoulder_up = np.linalg.norm(self.SHOULDER_UP - self.q0) < 0.1
@@ -46,13 +46,13 @@ class InitTask(TaskObject):
     def evaluate(self, t, dt):
         t = t - self.start_time - dt
         if self.done:
-            return self.task_manager.q, np.zeros((3, 1))
+            return self.task_manager.q, np.zeros((5, 1))
         elif (self.in_shoulder_up):
             if (t < 3.0):
                 return goto5(t, 3.0, self.SHOULDER_UP, self.ELBOW_UP)
             else:
                 self.done = True
-                return self.task_manager.q, np.zeros((3, 1))
+                return self.task_manager.q, np.zeros((5, 1))
         else:
             if (t < 3.0):
                 return goto5(t, 3.0, self.q0, self.SHOULDER_UP)
@@ -60,7 +60,7 @@ class InitTask(TaskObject):
                 return goto5(t-3, 3.0, self.SHOULDER_UP, self.ELBOW_UP)
             else:
                 self.done = True
-                return self.task_manager.q, np.zeros((3, 1))
+                return self.task_manager.q, np.zeros((5, 1))
 
 class TaskSplineTask(TaskObject):
     def __init__(self, start_time, task_manager, x_final=np.zeros((3, 1)), T=3.0, lam=20):
@@ -104,7 +104,7 @@ class TaskSplineTask(TaskObject):
             self.pd = pd
 
         else:
-            q, qdot = self.q, np.zeros((3, 1))
+            q, qdot = self.q, np.zeros((5, 1))
             self.done = True
 
         return q, qdot
@@ -129,7 +129,7 @@ class TaskHandler():
     
     def evaluate_task(self, t, dt):
         if self.curr_task_object is None and len(self.tasks) == 0:
-            return(self.q.flatten().tolist(), np.zeros(3, 1).flatten().tolist())
+            return(self.q.flatten().tolist(), np.zeros(5, 1).flatten().tolist())
         elif (self.curr_task_object is None or self.curr_task_object.done) and len(self.tasks) != 0:
             new_task_type, new_task_data = self.tasks.pop(0)
             self.set_state(new_task_type, t, **new_task_data)
