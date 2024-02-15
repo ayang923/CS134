@@ -12,8 +12,8 @@ J_EULER = np.array([[0, 1, -1, 1, 0],[0, 0, 0, 0, 1]]).reshape(2,5) # xdot4 = qd
 
 GRIP_OPEN = -0.15
 GRIP_DIE = -0.6
-GRIP_CHECKER = -0.3
-GRIP_CUP = -0.2
+GRIP_CHECKER = -0.6
+GRIP_CUP = -0.45
 
 def alpha(q): # letting alpha = 0 be "level with table"
     return q[1] - q[2] + q[3] + np.pi
@@ -25,6 +25,12 @@ class Tasks(Enum):
     INIT = 1
     JOINT_SPLINE = 2
     TASK_SPLINE = 3
+    GRIP = 4
+
+class GamePiece(Enum):
+    CHECKER = 1
+    DIE = 2
+    CUP = 3
 
 class TaskObject():
     def __init__(self, start_time, task_manager):
@@ -42,13 +48,12 @@ class TaskObject():
         raise NotImplementedError
     
 
-
 class InitTask(TaskObject):
     def __init__(self, start_time, task_manager):
         super().__init__(start_time, task_manager)
 
-        self.SHOULDER_UP = np.array([self.q0[0, 0], 0.0, self.q0[2, 0], self.q0[3,0], self.q0[4,0], GRIP_OPEN]).reshape(-1,1)
-        self.ELBOW_UP = np.array([0.0, 0.0, np.pi/2, -np.pi/2, 0.0, GRIP_OPEN]).reshape(-1,1)
+        self.SHOULDER_UP = np.array([self.q0[0, 0], 0.0, self.q0[2, 0], self.q0[3,0], self.q0[4,0], self.q0[5,0]]).reshape(-1,1)
+        self.ELBOW_UP = np.array([0.0, 0.0, np.pi/2, -np.pi/2, 0.0, self.q0[5,0]]).reshape(-1,1)
 
         # check what needs to be done
         self.in_shoulder_up = np.linalg.norm(self.SHOULDER_UP - self.q0) < 0.1
@@ -122,19 +127,39 @@ class TaskSplineTask(TaskObject):
             self.done = True
 
         return np.vstack((q,self.q0[5])), np.vstack((qdot,np.zeros(1)))
-'''    
+
+    
 class GripperTask(TaskObject):
-    def __init__(self, start_time, task_manager, game_piece="checker", grip=True):
-        # Game piece options are "checker", "die", "cup"
+    def __init__(self, start_time, task_manager, piece:GamePiece=GamePiece.CHECKER, grip=True):
+        # GamePiece enum object as above
         # grip=True means grip, grip=False means release
         super().__init__(start_time, task_manager)
 
         self.T = 0.75
 
+        self.qgrip0 = self.q0[5]
+        self.qgrip = self.qgrip0
+
+        self.piece = piece
+        self.grip = grip
+
     def evaluate(self, t, dt):
         t = t - self.start_time - dt
-        if
-'''
+        if t < self.T:
+            if not self.grip:
+                (self.qgrip, qdotgrip) = goto(t, self.T, self.qgrip0, GRIP_OPEN)
+            elif self.piece == GamePiece.CHECKER:
+                (self.qgrip, qdotgrip) = goto(t, self.T, self.qgrip0, GRIP_CHECKER)
+            elif self.piece == GamePiece.DIE:
+                (self.qgrip, qdotgrip) = goto(t, self.T, self.qgrip0, GRIP_DIE)
+            elif self.piece == GamePiece.CUP:
+                (self.qgrip, qdotgrip) = goto(t, self.T, self.qgrip0, GRIP_CUP)
+        else:
+            self.qgrip, qdotgrip = self.qgrip, np.zeros(1)
+            self.done = True
+        
+        return np.vstack((self.q0[:5],self.qgrip)), np.vstack((np.zeros((5,1)),qdotgrip))
+
 
 class TaskHandler():
     def __init__(self, node, q0):
@@ -176,6 +201,8 @@ class TaskHandler():
             self.curr_task_object = InitTask(t, self)
         elif task_type == Tasks.TASK_SPLINE:
             self.curr_task_object = TaskSplineTask(t, self, **kwargs)
+        elif task_type == Tasks.GRIP:
+            self.curr_task_object = GripperTask(t, self, **kwargs)
     
     def get_evaluator(self):
         return self.state_object.evaluate

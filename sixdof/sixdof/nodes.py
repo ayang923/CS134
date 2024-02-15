@@ -10,7 +10,7 @@ from geometry_msgs.msg  import Point, Pose, Quaternion
 from sixdof.TrajectoryUtils import goto, goto5
 from sixdof.TransformHelpers import *
 
-from sixdof.states import Tasks, TaskHandler, JOINT_NAMES
+from sixdof.states import Tasks, GamePiece, TaskHandler, JOINT_NAMES
 
 from enum import Enum
 
@@ -49,7 +49,10 @@ class TrajectoryNode(Node):
         self.task_handler = TaskHandler(self, np.array(self.position0).reshape(-1, 1))
         self.task_handler.add_state(Tasks.INIT)
         self.task_handler.add_state(Tasks.TASK_SPLINE, 
-                                    x_final=np.array([-0.5482, 0.25, 0.25, -np.pi/2, 0]).reshape(-1, 1))
+                                    x_final=np.array([-0.4, 0.4, 0.025, -np.pi/2, 0]).reshape(-1, 1))
+        self.task_handler.add_state(Tasks.GRIP)
+        self.task_handler.add_state(Tasks.INIT)
+        self.task_handler.add_state(Tasks.GRIP, grip=False)
 
         # game driver for trajectory node
         self.game_driver = GameDriver(self, self.task_handler)
@@ -120,9 +123,9 @@ class TrajectoryNode(Node):
         return (q, qdot)
     
     def gravitycomp(self, q):
-        A = -5.9
-        B = -0.5
-        C = 10.0
+        A = -6.0
+        B = 0.0
+        C = 9.5
         D = 0.0
         tau_elbow =  A * np.sin(-q[1] + q[2]) + B * np.cos(-q[1] + q[2])
         tau_shoulder = -tau_elbow + C * np.sin(-q[1]) + D * np.cos(-q[1])

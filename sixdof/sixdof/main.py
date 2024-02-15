@@ -25,14 +25,14 @@ def main(args=None):
 
     executor = rclpy.executors.MultiThreadedExecutor()
     executor.add_node(traj_node)
-    executor.add_node(detect_node)
+    #executor.add_node(detect_node)
     # Spin the node until interrupted.
     executor.spin()
 
     # Shutdown the node and ROS.
     rclpy.shutdown()
     traj_node.destroy_node()
-    detect_node.destroy_node()
+    #detect_node.destroy_node()
     executor.shutdown()
 
 if __name__ == "__main__":
