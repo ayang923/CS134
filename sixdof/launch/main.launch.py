@@ -56,8 +56,8 @@ def generate_launch_description():
         output     = 'screen',
         parameters = [{'testmode': 'off'},
                       {'family':   'robotlab'},
-                      {'motors':   ['6.4',  '6.7', '6.5', '6.2', '6.1']},
-                      {'joints':   ['base', 'shoulder', 'elbow', 'wristpitch', 'wristroll']}],
+                      {'motors':   ['6.4',  '6.7', '6.5', '6.2', '6.1', '6.3']},
+                      {'joints':   ['base', 'shoulder', 'elbow', 'wristpitch', 'wristroll', 'grip']}],
         on_exit    = Shutdown())
 
     # Configure the USB camera node

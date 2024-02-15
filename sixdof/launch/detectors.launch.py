@@ -20,19 +20,10 @@ def generate_launch_description():
     ######################################################################
     # LOCATE FILES
 
-    # Locate the RVIZ configuration file.
-    rvizcfg = os.path.join(pkgdir('sixdof'), 'rviz/viewurdf.rviz')
-
-    # Locate/load the robot's URDF file (XML).
-    urdf = os.path.join(pkgdir('sixdof'), 'urdf/134threedof.urdf')
-    with open(urdf, 'r') as file:
-        robot_description = file.read()
-
 
     ######################################################################
     # PREPARE THE LAUNCH ELEMENTS
 
-    # Configure the USB camera node
     node_usbcam = Node(
         name       = 'usb_cam', 
         package    = 'usb_cam',
@@ -53,9 +44,34 @@ def generate_launch_description():
                       {'auto_white_balance':  False},
                       {'white_balance':       4000},
                       {'autoexposure':        False},
-                      {'exposure':            30},
+                      {'exposure':            19},
                       {'autofocus':           False},
                       {'focus':               -1}])
+    
+        # Configure the USB camera node
+    node_tipcam = Node(
+        name       = 'usb_cam', 
+        package    = 'usb_cam',
+        executable = 'usb_cam_node_exe',
+        namespace  = 'tip_cam',
+        output     = 'screen',
+        parameters = [{'camera_name':         'logitech'},
+                    {'video_device':        '/dev/video0'},
+                    {'pixel_format':        'yuyv2rgb'},
+                    {'image_width':         640},
+                    {'image_height':        480},
+                    {'framerate':           15.0},
+                    {'brightness':          -1},
+                    {'contrast':            -1},
+                    {'saturation':          -1},
+                    {'sharpness':           -1},
+                    {'gain':                -1},
+                    {'auto_white_balance':  False},
+                    {'white_balance':       4000},
+                    {'autoexposure':        False},
+                    {'exposure':            30},
+                    {'autofocus':           False},
+                    {'focus':               -1}])
 
     # Configure a node for the simple demo.
     node_detector = Node(
@@ -73,4 +89,6 @@ def generate_launch_description():
 
         # Start the state publisher, rviz, hebi and demo nodes.
         node_usbcam,
+        node_tipcam,
+        node_detector
     ])

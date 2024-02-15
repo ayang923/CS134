@@ -17,7 +17,7 @@
   <joint name="placement" type="fixed">
     <parent link="world"/>
     <child  link="baseplate"/>
-    <origin xyz="0.0 0.0394 0.0" rpy="0 0 0"/>			<!-- WHERE IS THE BASE -->
+    <origin xyz="0.0 0.0 0.0" rpy="0 0 3.1415"/>			<!-- WHERE IS THE BASE -->
   </joint>
 
   <!-- BASE PLATE: Shift across the base plate to the base motor. --> 
@@ -190,6 +190,14 @@
       <material name="hebi"/>
     </visual>
   </link>
+
+  <joint name="tipcamera" type="fixed">
+    <parent link="rollmotor"/>
+    <child  link="tipcamera"/>
+    <origin xyz="-0.135 0.0 0.06" rpy="0.0 0.0 0"/>		  
+  </joint>
+
+  <link name="tipcamera"/>
 
   <joint name="wristroll" type="continuous">
     <parent link="rollmotor"/>

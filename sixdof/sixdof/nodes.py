@@ -18,7 +18,6 @@ RATE = 100.0            # Hertz
 
 nan = float("nan")
 
-
 class TrajectoryNode(Node):
     # Initialization.
     def __init__(self, name):
@@ -49,7 +48,8 @@ class TrajectoryNode(Node):
         # creates task handler for robot
         self.task_handler = TaskHandler(self, np.array(self.position0).reshape(-1, 1))
         self.task_handler.add_state(Tasks.INIT)
-        self.task_handler.add_state(Tasks.TASK_SPLINE, x_final=np.array([-0.5482, 0.265, 0.000]).reshape(-1, 1))
+        self.task_handler.add_state(Tasks.TASK_SPLINE, 
+                                    x_final=np.array([-0.5482, 0.25, 0.25, -np.pi/2, 0]).reshape(-1, 1))
 
         # game driver for trajectory node
         self.game_driver = GameDriver(self, self.task_handler)
@@ -135,11 +135,11 @@ class TrajectoryNode(Node):
         (tau_shoulder, tau_elbow) = self.gravitycomp(self.actpos)
         self.cmdmsg.header.stamp = self.get_clock().now().to_msg()
         self.cmdmsg.name         = self.jointnames
-        #self.cmdmsg.position     = [nan, nan, nan, nan, nan] # uncomment for gravity comp test
-        #self.cmdmsg.velocity     = [nan, nan, nan, nan, nan]
+        #self.cmdmsg.position     = [nan, nan, nan, nan, nan, nan] # uncomment for gravity comp test
+        #self.cmdmsg.velocity     = [nan, nan, nan, nan, nan, nan]
         self.cmdmsg.position     = q # comment for gravity comp
         self.cmdmsg.velocity     = qdot
-        self.cmdmsg.effort       = [0.0, tau_shoulder, tau_elbow, 0.0, 0.0]
+        self.cmdmsg.effort       = [0.0, tau_shoulder, tau_elbow, 0.0, 0.0, 0.0]
         self.cmdpub.publish(self.cmdmsg)
 
 # class passed into trajectory node to handle game logic
@@ -160,11 +160,11 @@ class GameDriver():
         y = pointmsg.y
         z = pointmsg.z
         
-        origin = np.array([-0.3, 0.03, 0.15]).reshape(-1,1)
+        origin = np.array([0.0, 0.0, 0.0]).reshape(-1,1)
         point = np.array([x, y, z]).reshape(-1,1)
         
         # print warning
-        if np.linalg.norm(point - origin) > 0.75:
+        if np.linalg.norm(point - origin) > 1.0:
             self.get_logger().info("Input near / outside workspace!")
         
         # Report.
@@ -196,87 +196,69 @@ class DetectorNode(Node):
     def process_raw_images(self, msg):
         # Confirm the encoding and report.
         assert(msg.encoding == "rgb8")
-        # self.get_logger().info(
-        #     "Image %dx%d, bytes/pixel %d, encoding %s" %
-        #     (msg.width, msg.height, msg.step/msg.width, msg.encoding))
+
 
         # Convert into OpenCV image, using RGB 8-bit (pass-through).
         frame = self.bridge.imgmsg_to_cv2(msg, "passthrough")
 
         # Convert to HSV
         #hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
 
-        grayscale = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(grayscale, (5, 5), 0)
-        params = cv2.SimpleBlobDetector_Params()
-        # Change thresholds
-        params.minThreshold = 0    # the graylevel of images
-        params.maxThreshold = 75
+        blurred = cv2.GaussianBlur(frame, (5, 5), 0)
+        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
 
-        binary_msk_die = cv2.inRange(blurred, 0, 75)
 
-        detector = cv2.SimpleBlobDetector_create(params)
-        keypoints = detector.detect(grayscale)
-        print(keypoints)
+        (H, W, D) = blurred.shape
+        uc = W//2
+        vc = H//2
 
-        im_with_keypoints = cv2.drawKeypoints(frame, keypoints, np.array([]), (0, 0, 255), cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+        blurred = cv2.line(blurred, (uc,0), (uc,H-1), (255, 255, 255), 1)
+        blurred = cv2.line(blurred, (0,vc), (W-1,vc), (255, 255, 255), 1)
+
+        YELLOW_BOARD_BOUNDS = np.array([[80, 100], [80, 170], [100, 180]])
+        RED_BOARD_BOUNDS = np.array([[110, 130], [100, 255], [50, 255]])
 
         # Threshold in Hmin/max, Smin/max, Vmin/max
-        binary_strip = cv2.inRange(hsv, self.checker_limits[:, 0], self.checker_limits[:, 1])
-        binary_checker = cv2.inRange(hsv, self.strip_limits[:,0], self.strip_limits[:,1])
-        binary = cv2.bitwise_or(binary_checker, binary_strip)
+        binary_yellow = cv2.inRange(hsv, YELLOW_BOARD_BOUNDS[:, 0], YELLOW_BOARD_BOUNDS[:, 1])
+        binary_red = cv2.inRange(hsv, RED_BOARD_BOUNDS[:, 0], RED_BOARD_BOUNDS[:, 1])
 
-        self.pub_strip.publish(self.bridge.cv2_to_imgmsg(im_with_keypoints, "rgb8"))
+        binary = cv2.bitwise_or(binary_yellow, binary_red)
+        
+
+        # trying to find board, dilating a lot to fill in boundary
+        binary_board = cv2.erode( binary, None, iterations=2)
+        binary_board = cv2.dilate(binary_board, None, iterations=8)
+
+        contours_board, _ = cv2.findContours(binary_board, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # finding board contour
+        if len(contours_board) > 0:
+            board_msk = np.zeros(binary.shape)
+            # Pick the largest contour.
+            contour_board = max(contours_board, key=cv2.contourArea)
+            cv2.drawContours(board_msk,[contour_board], 0, 1, -1)
+
+            # filters out everythign but board
+            binary = cv2.bitwise_and(binary, binary, mask=board_msk.astype('uint8'))
+
+            # detecting checkers
+            binary_checkers = cv2.dilate(binary, None, iterations=2)
+
+        # binary = cv2.erode( binary, None, iterations=iter)
+        self.get_logger().info(
+            "Center pixel HSV = (%3d, %3d, %3d)" % tuple(hsv[vc, uc]))
+
+
+        self.pub_strip.publish(self.bridge.cv2_to_imgmsg(binary_checkers))
 
         # Erode and Dilate. Definitely adjust the iterations!
-        iter = 4
-        binary = cv2.erode( binary, None, iterations=iter)
-        binary = cv2.dilate(binary, None, iterations=2*iter)
-        binary = cv2.erode( binary, None, iterations=iter)
 
-        # Find contours in the mask and initialize the current
-        # (x, y) center of the ball
-        (contours, hierarchy) = cv2.findContours(
-            binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # Only proceed if at least one contour was found.  You may
-        # also want to loop over the contours...
-        if len(contours) > 0:
-            # Pick the largest contour.
-            contour = max(contours, key=cv2.contourArea)
-            x0, y0 = 0.007, 0.477
+        # # Find contours in the mask and initialize the current
+        # # (x, y) center of the ball
+        # (contours, hierarchy) = cv2.findContours(
+        #     binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-            ((ur, vr), (w, h), theta) = cv2.minAreaRect(contour)
-            xy = pixelToWorld(frame, ur, vr, x0, y0)
-
-            #self.get_logger().info(f"{theta}")
-
-            if xy is not None:
-                (x, y) = xy
-                point_msg = Point()
-                point_msg.x = float(x)
-                point_msg.y = float(y)
-                # Naci Note here: I was checking rviz while running this and also sending node commands.
-                # I think we have a small error with our z height recognition, thus I am changing the 
-                # z value here. 
-                point_msg.z = 0.005
-                
-                if 0.5 <= w/h <= 2:
-                    self.pubpoints.publish(point_msg)
-                else:
-                    pose_msg = Pose()
-                    pose_msg.position = point_msg
-
-                    quart_msg = Quaternion()
-                    quart_msg.x = 0.0
-                    quart_msg.y = 0.0
-                    quart_msg.z = np.sin(theta/2)
-                    quart_msg.w = np.cos(theta/2)
-                    pose_msg.orientation = quart_msg
-
-                    self.pubpoints.publish(point_msg)
-                    self.pubposes.publish(pose_msg)
 
 # helper functions
 def pixelToWorld(image, u, v, x0, y0, annotateImage=True):
