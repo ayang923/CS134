@@ -25,9 +25,9 @@ class GameDriver():
         self.sub_dice = self.trajectory_node.create_subscription(UInt8MultiArray, '/dice',
                                                                  self.recvdice, 3)
         
-        # Stored gamestate info
-        self.board1pose = 0 # TODO
-        self.board2pose = 0 # TODO
+        # Representation of physical game board
+        self.game_board = GameBoard()
+
         self.logoddsgrid = 0 # TODO log odds representation of occupancy by green/brown
 
         # Initial gamestate area assumes setup for beginning of game
@@ -55,7 +55,7 @@ class GameDriver():
         updates self.board1pose and self.board2pose, no return
         TODO
         '''
-        pass
+        self.game_board.filtered_board_update(msg.poses)
 
     def recvgreen(self, msg):
         '''
@@ -92,18 +92,7 @@ class GameDriver():
         pass 
 
     def grid_from_board(self):
-        '''
-        return 25 regions with 6 subdivisions each for bucketing given
-        current belief of the board pose
-
-        in: self (need self.boardpose1 and self.boardpose2)
-
-        returns: center coordinates of 25*6 = 150 grid spaces that a checker
-        could occupy.
-
-        based only on geometry of board, basically need to measure this out
-        TODO
-        '''
+        
         pass
 
     def update_log_odds(self):   
@@ -147,3 +136,47 @@ class GameDriver():
             wait for my turn in the init position
         '''
         pass
+
+# physical representation of the two halves of the board
+class GameBoard():
+    def __init__(self):
+        # FIXME with "expected" values for the boards
+        self.board1x = 0
+        self.board1y = 0
+        self.board1t = 0
+        
+        self.board2x = 0
+        self.board2y = 0
+        self.board2t = 0
+
+        self.tau = 3 # FIXME
+        self.alpha = 1 - 1/self.tau
+
+    def get_grid_centers(self):
+        '''
+        return 25 regions with 6 subdivisions each for bucketing given
+        current belief of the board pose
+
+        in: self (need board positional info)
+
+        returns: center coordinates of 25*6 = 150 grid spaces that a checker
+        could occupy.
+
+        based only on geometry of board, basically need to measure this out
+        TODO
+        '''
+        pass
+
+    def filtered_board_update(self, measurements):
+        self.board1x = self.filtered_update(self.board1x, measurements[0].positions.x)
+        self.board1y = self.filtered_update(self.board1y, measurements[0].positions.y)
+        # filtered update call with quat to theta translation for board1
+        self.board2x = self.filtered_update(self.board2x, measurements[1].positions.x)
+        self.board2y = self.filtered_update(self.board2y, measurements[1].positions.y)
+        # filtered update call with quat to theta translation for board2
+
+    def filtered_update(self, value, newvalue):
+        value = (1 - self.alpha) * value + self.alpha * newvalue
+        return value
+
+        
