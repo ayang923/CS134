@@ -45,14 +45,20 @@ class TrajectoryNode(Node):
         self.fbksub = self.create_subscription(JointState, '/joint_states',
                                                self.recvfbk, 100)
 
+        # Images
+        self.checker_limits = np.array(([40, 100], [20, 80], [20, 80]))
+
+        self.bridge = cv_bridge.CvBridge()
+
+        self.rcvimg_top = self.create_subscription(Image, '/usb_cam_top/image_raw',
+                                                  self.process_top, 1)
+        
+        self.pubpoints = self.create_publisher(Point, '/point', 3)
+
         # creates task handler for robot
         self.task_handler = TaskHandler(self, np.array(self.position0).reshape(-1, 1))
+
         self.task_handler.add_state(Tasks.INIT)
-        self.task_handler.add_state(Tasks.TASK_SPLINE, 
-                                    x_final=np.array([-0.4, 0.4, 0.025, -np.pi/2, 0]).reshape(-1, 1))
-        self.task_handler.add_state(Tasks.GRIP)
-        self.task_handler.add_state(Tasks.INIT)
-        self.task_handler.add_state(Tasks.GRIP, grip=False)
 
         # game driver for trajectory node
         self.game_driver = GameDriver(self, self.task_handler)
@@ -123,12 +129,8 @@ class TrajectoryNode(Node):
         return (q, qdot)
     
     def gravitycomp(self, q):
-        A = -6.0
-        B = 0.0
-        C = 9.5
-        D = 0.0
-        tau_elbow =  A * np.sin(-q[1] + q[2]) + B * np.cos(-q[1] + q[2])
-        tau_shoulder = -tau_elbow + C * np.sin(-q[1]) + D * np.cos(-q[1])
+        tau_elbow = -5.75 * np.sin(-q[1] + q[2])
+        tau_shoulder = -tau_elbow + 9.5 * np.sin(-q[1])
         return (tau_shoulder, tau_elbow)
 
     # Send a command - called repeatedly by the timer.
@@ -145,6 +147,101 @@ class TrajectoryNode(Node):
         self.cmdmsg.effort       = [0.0, tau_shoulder, tau_elbow, 0.0, 0.0, 0.0]
         self.cmdpub.publish(self.cmdmsg)
 
+    def process_top(self, msg):
+        # Confirm the encoding and report.
+        assert(msg.encoding == "rgb8")
+        # self.get_logger().info(
+        #     "Image %dx%d, bytes/pixel %d, encoding %s" %
+        #     (msg.width, msg.height, msg.step/msg.width, msg.encoding))
+
+        # Convert into OpenCV image, using RGB 8-bit (pass-through).
+        frame = self.bridge.imgmsg_to_cv2(msg, "passthrough")
+
+        # Convert to HSV
+        #hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
+
+        # Threshold in Hmin/max, Smin/max, Vmin/max
+        binary = cv2.inRange(hsv, self.checker_limits[:, 0], self.checker_limits[:, 1])
+
+        # Erode and Dilate. Definitely adjust the iterations!
+        iter = 4
+        binary = cv2.erode( binary, None, iterations=iter)
+        binary = cv2.dilate(binary, None, iterations=2*iter)
+        binary = cv2.erode( binary, None, iterations=iter)
+
+        # Find contours in the mask and initialize the current
+        # (x, y) center of the ball
+        (contours, hierarchy) = cv2.findContours(
+            binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Only proceed if at least one contour was found.  You may
+        # also want to loop over the contours...
+        if len(contours) > 0:
+            # Pick the largest contour.
+            contour = max(contours, key=cv2.contourArea)
+            x0, y0 = 0.018, 0.396
+
+            ((ur, vr), (w, h), theta) = cv2.minAreaRect(contour)
+            xy = self.pixelToWorld(frame, ur, vr, x0, y0)
+
+            if xy is not None:
+                (x, y) = xy
+                point_msg = Point()
+                point_msg.x = float(x)
+                point_msg.y = float(y)
+                point_msg.z = 0.006
+
+                self.pubpoints.publish(point_msg)
+    
+    # Pixel Conversion
+    def pixelToWorld(self, image, u, v, x0, y0, annotateImage=True):
+        '''
+        Convert the (u,v) pixel position into (x,y) world coordinates
+        Inputs:
+          image: The image as seen by the camera
+          u:     The horizontal (column) pixel coordinate
+          v:     The vertical (row) pixel coordinate
+          x0:    The x world coordinate in the center of the marker paper
+          y0:    The y world coordinate in the center of the marker paper
+          annotateImage: Annotate the image with the marker information
+
+        Outputs:
+          point: The (x,y) world coordinates matching (u,v), or None
+
+        Return None for the point if not all the Aruco markers are detected
+        '''
+
+        # Detect the Aruco markers (using the 4X4 dictionary).
+        markerCorners, markerIds, _ = cv2.aruco.detectMarkers(
+            image, cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50))
+        
+        # Abort if not all markers are detected.
+        if (markerIds is None or len(markerIds) != 4 or
+            set(markerIds.flatten()) != set([1,2,3,4])):
+            return None
+
+        # Determine the center of the marker pixel coordinates.
+        uvMarkers = np.zeros((4,2), dtype='float32')
+        for i in range(4):
+            uvMarkers[markerIds[i]-1,:] = np.mean(markerCorners[i], axis=1)
+
+        # Calculate the matching World coordinates of the 4 Aruco markers.
+        DX = 0.484
+        DY = 0.222
+
+        xyMarkers = np.float32([[x0+dx, y0+dy] for (dx, dy) in
+                                [(-DX, DY), (DX, DY), (-DX, -DY), (DX, -DY)]])
+
+        # Create the perspective transform.
+        M = cv2.getPerspectiveTransform(uvMarkers, xyMarkers)
+
+        # Map the object in question.
+        uvObj = np.float32([u, v])
+        xyObj = cv2.perspectiveTransform(uvObj.reshape(1,1,2), M).reshape(2)
+
+        return xyObj
+
 # class passed into trajectory node to handle game logic
 class GameDriver():
     def __init__(self, trajectory_node, task_handler):
@@ -155,23 +252,28 @@ class GameDriver():
                                                   self.recvpoint, 3)
         
     def recvpoint(self, pointmsg):
-        if not self.task_handler.curr_task_object.done:
-            self.trajectory_node.get_logger().info("in motion")
+        if self.task_handler.tasks:
             return
+
         # Extract the data.
         x = pointmsg.x
         y = pointmsg.y
         z = pointmsg.z
+
+        print("FOUND CHECKER AT ({:.2f}, {:.2f}, {:.2f})".format(x, y, z),
+              flush=True)
         
-        origin = np.array([0.0, 0.0, 0.0]).reshape(-1,1)
-        point = np.array([x, y, z]).reshape(-1,1)
-        
-        # print warning
-        if np.linalg.norm(point - origin) > 1.0:
-            self.get_logger().info("Input near / outside workspace!")
+        p1 = np.array([x, y, z + 0.05, -np.pi / 2, 0]).reshape(-1, 1)
+        p2 = np.array([x, y, z + 0.005, -np.pi / 2, 0]).reshape(-1, 1)
         
         # Report.
-        self.task_handler.add_state(Tasks.TASK_SPLINE, x_final=point, T=3)
+        self.task_handler.add_state(Tasks.INIT)
+        self.task_handler.add_state(Tasks.TASK_SPLINE, x_final = p1, T = 4)
+        self.task_handler.add_state(Tasks.TASK_SPLINE, x_final = p2, T = 4)
+        self.task_handler.add_state(Tasks.GRIP)
+        self.task_handler.add_state(Tasks.INIT)
+        self.task_handler.add_state(Tasks.GRIP, grip=False)
+
 
 
 class DetectorNode(Node):
@@ -183,18 +285,16 @@ class DetectorNode(Node):
         
         self.bridge = cv_bridge.CvBridge()
 
-        # subscriber for raw images
+        #subscriber for raw images
         self.rcvimages = self.create_subscription(Image, '/usb_cam/image_raw',
-                                                  self.process_raw_images, 1)
+                                                 self.process_raw_images, 1)
         
-        # publisher for detections
+        #publisher for detections
         self.pubpoints = self.create_publisher(Point, '/point', 3)
         self.pubposes = self.create_publisher(Pose, '/pose', 3)
         
-        # publisher for debugging images
+        #publisher for debugging images
         self.pub_strip = self.create_publisher(Image, '/goals4/binary',    3)
-
-
 
     def process_raw_images(self, msg):
         # Confirm the encoding and report.
@@ -218,8 +318,8 @@ class DetectorNode(Node):
         blurred = cv2.line(blurred, (uc,0), (uc,H-1), (255, 255, 255), 1)
         blurred = cv2.line(blurred, (0,vc), (W-1,vc), (255, 255, 255), 1)
 
-        YELLOW_BOARD_BOUNDS = np.array([[80, 100], [80, 170], [100, 180]])
-        RED_BOARD_BOUNDS = np.array([[110, 130], [100, 255], [50, 255]])
+        YELLOW_BOARD_BOUNDS = np.array([[80, 120], [100, 180], [170, 250]])
+        RED_BOARD_BOUNDS = np.array([[100, 140], [140, 220], [120, 200]])
 
         # Threshold in Hmin/max, Smin/max, Vmin/max
         binary_yellow = cv2.inRange(hsv, YELLOW_BOARD_BOUNDS[:, 0], YELLOW_BOARD_BOUNDS[:, 1])
@@ -227,7 +327,6 @@ class DetectorNode(Node):
 
         binary = cv2.bitwise_or(binary_yellow, binary_red)
         
-
         # trying to find board, dilating a lot to fill in boundary
         binary_board = cv2.erode( binary, None, iterations=2)
         binary_board = cv2.dilate(binary_board, None, iterations=8)
@@ -250,7 +349,6 @@ class DetectorNode(Node):
         # binary = cv2.erode( binary, None, iterations=iter)
         self.get_logger().info(
             "Center pixel HSV = (%3d, %3d, %3d)" % tuple(hsv[vc, uc]))
-
 
         self.pub_strip.publish(self.bridge.cv2_to_imgmsg(binary_checkers))
 

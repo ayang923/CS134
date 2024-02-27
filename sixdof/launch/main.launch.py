@@ -60,12 +60,37 @@ def generate_launch_description():
                       {'joints':   ['base', 'shoulder', 'elbow', 'wristpitch', 'wristroll', 'grip']}],
         on_exit    = Shutdown())
 
-    # Configure the USB camera node
-    node_usbcam = Node(
-        name       = 'usb_cam', 
+    # Configure the top-down USB camera node
+    node_usbcam_top = Node(
+        name       = 'usb_cam_top', 
         package    = 'usb_cam',
         executable = 'usb_cam_node_exe',
-        namespace  = 'usb_cam',
+        namespace  = 'usb_cam_top',
+        output     = 'screen',
+        parameters = [{'camera_name':         'logitech'},
+                      {'video_device':        '/dev/video2'},
+                      {'pixel_format':        'yuyv2rgb'},
+                      {'image_width':         960},
+                      {'image_height':        720},
+                      {'framerate':           15.0},
+                      {'brightness':          -1},
+                      {'contrast':            -1},
+                      {'saturation':          -1},
+                      {'sharpness':           -1},
+                      {'gain':                -1},
+                      {'auto_white_balance':  False},
+                      {'white_balance':       4000},
+                      {'autoexposure':        False},
+                      {'exposure':            10},
+                      {'autofocus':           False},
+                      {'focus':               -1}])
+    
+    # Configure the wrist USB camera node
+    node_usbcam_wrist = Node(
+        name       = 'usb_cam_wrist', 
+        package    = 'usb_cam',
+        executable = 'usb_cam_node_exe',
+        namespace  = 'usb_cam_wrist',
         output     = 'screen',
         parameters = [{'camera_name':         'logitech'},
                       {'video_device':        '/dev/video0'},
@@ -101,8 +126,9 @@ def generate_launch_description():
 
         # Start the state publisher, rviz, hebi and demo nodes.
         node_robot_state_publisher_ACTUAL,
-        node_usbcam,
-        node_rviz,
+        node_usbcam_top,
+        node_usbcam_wrist,
+        #node_rviz,
         node_hebi,
         node_main,
     ])

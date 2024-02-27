@@ -33,8 +33,8 @@ def generate_launch_description():
         parameters = [{'camera_name':         'logitech'},
                       {'video_device':        '/dev/video2'},
                       {'pixel_format':        'yuyv2rgb'},
-                      {'image_width':         640},
-                      {'image_height':        480},
+                      {'image_width':         960},
+                      {'image_height':        720},
                       {'framerate':           15.0},
                       {'brightness':          -1},
                       {'contrast':            -1},
@@ -44,7 +44,7 @@ def generate_launch_description():
                       {'auto_white_balance':  False},
                       {'white_balance':       4000},
                       {'autoexposure':        False},
-                      {'exposure':            19},
+                      {'exposure':            10},
                       {'autofocus':           False},
                       {'focus':               -1}])
     

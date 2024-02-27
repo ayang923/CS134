@@ -181,7 +181,7 @@ class TaskHandler():
     
     def evaluate_task(self, t, dt):
         if self.curr_task_object is None and len(self.tasks) == 0:
-            return(self.q.flatten().tolist(), np.zeros(6, 1).flatten().tolist())
+            return(self.q.flatten().tolist(), np.zeros((6, 1)).flatten().tolist())
         elif (self.curr_task_object is None or self.curr_task_object.done) and len(self.tasks) != 0:
             new_task_type, new_task_data = self.tasks.pop(0)
             self.set_state(new_task_type, t, **new_task_data)
