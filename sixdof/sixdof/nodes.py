@@ -12,7 +12,7 @@ from sixdof.TrajectoryUtils import goto, goto5
 from sixdof.TransformHelpers import *
 
 from sixdof.states import Tasks, GamePiece, TaskHandler, JOINT_NAMES
-from sixdof.game import GameDriver
+from sixdof.game import GameDriver, Color
 
 from enum import Enum
 
@@ -248,8 +248,8 @@ class DetectorNode(Node):
 
         self.pub_board_mask.publish(self.bridge.cv2_to_imgmsg(binary))
 
-    def detect_checkers(self, hsv, color):
-        if color == 'green':
+    def detect_checkers(self, hsv, color:Color):
+        if color == Color.GREEN:
             limits = self.green_checker_limits
         else:
             limits = self.brown_checker_limits
@@ -263,7 +263,7 @@ class DetectorNode(Node):
         binary = cv2.dilate(binary, None, iterations=2*iter)
         binary = cv2.erode(binary, None, iterations=2*iter)
 
-        if color == 'green':
+        if color == Color.GREEN:
             self.pub_green_mask.publish(self.bridge.cv2_to_imgmsg(binary))
         else:
             self.pub_brown_mask.publish(self.bridge.cv2_to_imgmsg(binary))
@@ -290,19 +290,14 @@ class DetectorNode(Node):
             
         self.publish_checkers(checkers, color)
 
-    def publish_checkers(self, checkers, color):
+    def publish_checkers(self, checkers, color:Color):
         checkerarray = PoseArray()
         for checker in checkers:
-            checkerpose = Pose()
-            checkerpose.position.x = checker[0]
-            checkerpose.position.y = checker[1]
-            checkerpose.position.z = 0 # TODO height of board
-            checkerpose.orientation.x = 0
-            checkerpose.orientation.y = 0
-            checkerpose.orientation.z = 0
-            checkerpose.orientation.w = 0
+            p = pxyz(checker[0], checker[1], 0.005)
+            R = Reye()
+            checkerpose = Pose_from_T(T_from_Rp(R,p))
             checkerarray.poses.append(checkerpose)
-        if color == 'green':
+        if color == Color.GREEN:
             self.pub_green.publish(checkerarray)
         else:
             self.pub_brown.publish(checkerarray)
@@ -312,24 +307,16 @@ class DetectorNode(Node):
         pass
 
     def publish_board_pose(self, boardxyt):
-        # TODO convert from xytheta into pose msg
-        board1pose = Pose()
-        board1pose.position.x = 0
-        board1pose.position.y = 0
-        board1pose.position.z = 0 # board thickness
-        board1pose.orientation.x = 0
-        board1pose.orientation.y = 0
-        board1pose.orientation.z = 0
-        board1pose.orientation.w = 0
+        '''
+        
+        '''
+        p1 = pxyz(boardxyt[0,0], boardxyt[0,1], 0.005)
+        R1 = Rotz(boardxyt[0,2])
+        board1pose = Pose_from_T(T_from_Rp(R1,p1))
 
-        board2pose = Pose()
-        board2pose.position.x = 0
-        board2pose.position.y = 0
-        board2pose.position.z = 0 # board thickness
-        board2pose.orientation.x = 0
-        board2pose.orientation.y = 0
-        board2pose.orientation.z = 0
-        board2pose.orientation.w = 0
+        p2 = pxyz(boardxyt[1,0], boardxyt[1,1], 0.005)
+        R2 = Rotz(boardxyt[1,2])
+        board2pose = Pose_from_T(T_from_Rp(R2,p2))
 
         boardposes = PoseArray()
         boardposes.poses.append(board1pose)

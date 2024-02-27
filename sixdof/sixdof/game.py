@@ -1,7 +1,13 @@
 from geometry_msgs.msg  import Point, Pose, Quaternion, PoseArray
 from std_msgs.msg import UInt8MultiArray
 
+from enum import Enum
+
 import numpy as np
+
+class Color(Enum):
+    GREEN = 1
+    BROWN = 2
 
 # class passed into trajectory node to handle game logic
 class GameDriver():
@@ -53,7 +59,6 @@ class GameDriver():
 
         in: /boardpose PoseArray
         updates self.board1pose and self.board2pose, no return
-        TODO
         '''
         self.game_board.filtered_board_update(msg.poses)
 
@@ -69,16 +74,24 @@ class GameDriver():
         PoseArray /green and refresh self.greenpos),
         self.logoddsgrid (log odds of grid spaces being occupied) using update_log_odds(),
         and self.gamestate (actionable game state representation)
-        TODO
         '''
-        pass
+        self.greenpos = np.array([[]])
+        for pose in msg.poses:
+            xy = [pose.position.x, pose.position.y]
+            self.greenpos = np.append(self.greenpos, xy)
+        self.update_log_odds(Color.GREEN)
+        self.update_gamestate(Color.GREEN)
 
     def recvbrown(self, msg):
         '''
         same as above, but for brown
-        TODO
         '''
-        pass
+        self.brownpos = np.array([[]])
+        for pose in msg.poses:
+            xy = [pose.position.x, pose.position.y]
+            self.brownpos = np.append(self.brownpos, xy)
+        self.update_log_odds(Color.BROWN)
+        self.update_gamestate(Color.BROWN)
 
     def recvdice(self, msg):
         '''
@@ -89,13 +102,9 @@ class GameDriver():
         places values in self.dice
         TODO
         '''
-        pass 
-
-    def grid_from_board(self):
-        
         pass
 
-    def update_log_odds(self):   
+    def update_log_odds(self, color:Color):   
         '''
         update log odds ratio for each of the grid spaces
         each space has p_green and p_brown (for being occupied by a green
@@ -108,9 +117,14 @@ class GameDriver():
         updates self.logoddsgrid given the values in self.greenpos and self.brownpos
         from the most recent processed frame
 
-        use grid_from_board() to determine how to increment/decrement the log
+        use self.game_board.get_grid_centers() to determine how to increment/decrement the log
         odds grid given the detected checker positions.
         TODO
+        '''
+        pass
+
+    def update_gamestate(self, color:Color):
+        '''
         '''
         pass
 
@@ -141,12 +155,12 @@ class GameDriver():
 class GameBoard():
     def __init__(self):
         # FIXME with "expected" values for the boards
-        self.board1x = 0
-        self.board1y = 0
+        self.board1x = -0.25
+        self.board1y = 0.387
         self.board1t = 0
         
-        self.board2x = 0
-        self.board2y = 0
+        self.board2x = 0.25
+        self.board2y = 0.387
         self.board2t = 0
 
         self.tau = 3 # FIXME
