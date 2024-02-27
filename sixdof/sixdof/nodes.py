@@ -175,8 +175,12 @@ class DetectorNode(Node):
 
         self.pub_dice = self.create_publisher(UInt8MultiArray, '/dice', 3)
         
-        #publisher for debugging images
-        self.pub_mask = self.create_publisher(Image, '/usb_cam/binary', 3)
+        #publishers for debugging images
+        self.pub_board_mask = self.create_publisher(Image, '/usb_cam/board_binary', 3)
+
+        self.pub_green_mask = self.create_publisher(Image, '/usb_cam/green_checker_binary')
+
+        self.pub_brown_mask = self.create_publisher(Image, '/usb_cam/brown_checker_binary')
 
 
         self.bridge = cv_bridge.CvBridge()
@@ -242,10 +246,7 @@ class DetectorNode(Node):
             # filters out everythign but board
             binary = cv2.bitwise_and(binary, binary, mask=board_msk.astype('uint8'))
 
-            # detecting checkers
-            binary_checkers = cv2.dilate(binary, None, iterations=2)
-
-        self.pub_mask.publish(self.bridge.cv2_to_imgmsg(binary_checkers))
+        self.pub_board_mask.publish(self.bridge.cv2_to_imgmsg(binary))
 
     def detect_checkers(self, hsv, color):
         if color == 'green':
@@ -261,6 +262,11 @@ class DetectorNode(Node):
         binary = cv2.erode(binary, None, iterations=iter)
         binary = cv2.dilate(binary, None, iterations=2*iter)
         binary = cv2.erode(binary, None, iterations=2*iter)
+
+        if color == 'green':
+            self.pub_green_mask.publish(self.bridge.cv2_to_imgmsg(binary))
+        else:
+            self.pub_brown_mask.publish(self.bridge.cv2_to_imgmsg(binary))
 
         # Find contours in the mask
         (contours, hierarchy) = cv2.findContours(
