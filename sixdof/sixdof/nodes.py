@@ -196,7 +196,7 @@ class DetectorNode(Node):
         frame = self.bridge.imgmsg_to_cv2(msg, "passthrough")
 
         boardxyt = getBoardXYT(frame, x0, y0)
-        self.publish_board_pos(boardxyt) # send board PoseArray to /boardpose
+        self.publish_board_pose(boardxyt) # send board PoseArray to /boardpose
 
         # Convert to HSV
         #hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
@@ -311,7 +311,7 @@ class DetectorNode(Node):
         # TODO
         pass
 
-    def publish_board_pos(self, boardxyt):
+    def publish_board_pose(self, boardxyt):
         # TODO convert from xytheta into pose msg
         board1pose = Pose()
         board1pose.position.x = 0
