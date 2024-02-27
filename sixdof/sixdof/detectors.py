@@ -15,9 +15,6 @@ from sixdof.nodes import TrajectoryNode, DetectorNode
 
 from enum import Enum
 
-GREEN_CHECKER_LIMITS = np.array(([20, 50], [50, 200], [80, 120]))
-ORANGE_CHECKER_LIMITS = np.array(([80, 120], [140, 200], [180, 255]))
-
 def main(args=None):
     # Initialize ROS.
     rclpy.init(args=args)

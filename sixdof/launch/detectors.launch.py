@@ -24,7 +24,7 @@ def generate_launch_description():
     ######################################################################
     # PREPARE THE LAUNCH ELEMENTS
 
-    node_usbcam = Node(
+    node_usbcam_top = Node(
         name       = 'usb_cam', 
         package    = 'usb_cam',
         executable = 'usb_cam_node_exe',
@@ -49,7 +49,7 @@ def generate_launch_description():
                       {'focus':               -1}])
     
         # Configure the USB camera node
-    node_tipcam = Node(
+    node_usbcam_wrist = Node(
         name       = 'usb_cam', 
         package    = 'usb_cam',
         executable = 'usb_cam_node_exe',
@@ -88,7 +88,7 @@ def generate_launch_description():
     return LaunchDescription([
 
         # Start the state publisher, rviz, hebi and demo nodes.
-        node_usbcam,
-        node_tipcam,
+        node_usbcam_top,
+        node_usbcam_wrist,
         node_detector
     ])

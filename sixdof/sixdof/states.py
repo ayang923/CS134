@@ -52,8 +52,8 @@ class InitTask(TaskObject):
     def __init__(self, start_time, task_manager):
         super().__init__(start_time, task_manager)
 
-        self.SHOULDER_UP = np.array([self.q0[0, 0], 0.0, self.q0[2, 0], self.q0[3,0], self.q0[4,0], self.q0[5,0]]).reshape(-1,1)
-        self.ELBOW_UP = np.array([0.0, 0.0, np.pi/2, -np.pi/2, 0.0, self.q0[5,0]]).reshape(-1,1)
+        self.SHOULDER_UP = np.array([self.q0[0, 0], 0.75, self.q0[2, 0], self.q0[3,0], self.q0[4,0], self.q0[5,0]]).reshape(-1,1)
+        self.ELBOW_UP = np.array([0.0, 0.75, np.pi/2, -3*np.pi/4, 0.0, self.q0[5,0]]).reshape(-1,1)
 
         # check what needs to be done
         self.in_shoulder_up = np.linalg.norm(self.SHOULDER_UP - self.q0) < 0.1
@@ -206,3 +206,15 @@ class TaskHandler():
     
     def get_evaluator(self):
         return self.state_object.evaluate
+    
+    # Macro Add Behavior Functions
+
+    def pick_and_drop(self, pos):
+        p1 = np.array([pos[0], pos[1], pos[2] + 0.05, -np.pi / 2, 0]).reshape(-1, 1)
+        p2 = np.array([pos[0], pos[1], pos[2] + 0.005, -np.pi / 2, 0]).reshape(-1, 1)
+        self.add_state(Tasks.INIT)
+        self.add_state(Tasks.TASK_SPLINE, x_final = p1, T = 4)
+        self.add_state(Tasks.TASK_SPLINE, x_final = p2, T = 4)
+        self.add_state(Tasks.GRIP)
+        self.add_state(Tasks.INIT)
+        self.add_state(Tasks.GRIP, grip=False)

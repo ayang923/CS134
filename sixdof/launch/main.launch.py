@@ -62,10 +62,10 @@ def generate_launch_description():
 
     # Configure the top-down USB camera node
     node_usbcam_top = Node(
-        name       = 'usb_cam_top', 
+        name       = 'usb_cam', 
         package    = 'usb_cam',
         executable = 'usb_cam_node_exe',
-        namespace  = 'usb_cam_top',
+        namespace  = 'usb_cam',
         output     = 'screen',
         parameters = [{'camera_name':         'logitech'},
                       {'video_device':        '/dev/video2'},
@@ -85,30 +85,30 @@ def generate_launch_description():
                       {'autofocus':           False},
                       {'focus':               -1}])
     
-    # Configure the wrist USB camera node
+        # Configure the USB camera node
     node_usbcam_wrist = Node(
-        name       = 'usb_cam_wrist', 
+        name       = 'usb_cam', 
         package    = 'usb_cam',
         executable = 'usb_cam_node_exe',
-        namespace  = 'usb_cam_wrist',
+        namespace  = 'tip_cam',
         output     = 'screen',
         parameters = [{'camera_name':         'logitech'},
-                      {'video_device':        '/dev/video0'},
-                      {'pixel_format':        'yuyv2rgb'},
-                      {'image_width':         640},
-                      {'image_height':        480},
-                      {'framerate':           15.0},
-                      {'brightness':          -1},
-                      {'contrast':            -1},
-                      {'saturation':          -1},
-                      {'sharpness':           -1},
-                      {'gain':                -1},
-                      {'auto_white_balance':  False},
-                      {'white_balance':       4000},
-                      {'autoexposure':        False},
-                      {'exposure':            30},
-                      {'autofocus':           False},
-                      {'focus':               -1}])
+                    {'video_device':        '/dev/video0'},
+                    {'pixel_format':        'yuyv2rgb'},
+                    {'image_width':         640},
+                    {'image_height':        480},
+                    {'framerate':           15.0},
+                    {'brightness':          -1},
+                    {'contrast':            -1},
+                    {'saturation':          -1},
+                    {'sharpness':           -1},
+                    {'gain':                -1},
+                    {'auto_white_balance':  False},
+                    {'white_balance':       4000},
+                    {'autoexposure':        False},
+                    {'exposure':            30},
+                    {'autofocus':           False},
+                    {'focus':               -1}])
 
     # Configure a node for the simple demo.
     node_main = Node(
@@ -128,7 +128,7 @@ def generate_launch_description():
         node_robot_state_publisher_ACTUAL,
         node_usbcam_top,
         node_usbcam_wrist,
-        #node_rviz,
+        node_rviz,
         node_hebi,
         node_main,
     ])
