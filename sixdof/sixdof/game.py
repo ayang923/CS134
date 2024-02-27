@@ -34,7 +34,7 @@ class GameDriver():
         # Representation of physical game board
         self.game_board = GameBoard()
 
-        self.logoddsgrid = 0 # TODO log odds representation of occupancy by green/brown
+        self.logoddsgrid = np.zeros((25,6)) # TODO log odds representation of occupancy by green/brown
 
         # Initial gamestate area assumes setup for beginning of game
         # each element indicates [num_green, num_brown]

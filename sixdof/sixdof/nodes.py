@@ -185,20 +185,30 @@ class DetectorNode(Node):
         self.pub_brown_mask = self.create_publisher(Image, 
                                                     '/usb_cam/brown_checker_binary', 3)
 
-
         self.bridge = cv_bridge.CvBridge()
 
-    def process_top_images(self, msg):
-        x0, y0 = 0.0, 0.387
-        
+        self.M = None
+        self.last_frame = None
+
+        self.rgb = None
+
+        self.M_timer = self.create_timer(5, self.get_perspective_transform_mat)
+        self.board_timer = self.create_timer(1, self.publish_board_pose)
+
+        self.x0 = 0.0
+        self.y0 = 0.387
+
+    def process_top_images(self, msg):     
         # Confirm the encoding and report.
         assert(msg.encoding == "rgb8")
 
         # Convert into OpenCV image, using RGB 8-bit (pass-through).
         frame = self.bridge.imgmsg_to_cv2(msg, "passthrough")
 
-        #boardxyt = getBoardXYT(frame, x0, y0)
-        #self.publish_board_pose(boardxyt) # send board PoseArray to /boardpose
+        self.last_frame = frame
+
+        if self.M is None:
+            self.M = self.get_perspective_transform_mat()
 
         blurred = cv2.GaussianBlur(frame, (5, 5), 0)
         hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
@@ -213,9 +223,37 @@ class DetectorNode(Node):
         #self.detect_checkers(frame, Color.BROWN)
 
         # binary = cv2.erode( binary, None, iterations=iter)
-        self.get_logger().info(
-            "Center pixel HSV = (%3d, %3d, %3d)" % tuple(hsv[vc, uc]))
+        #self.get_logger().info(
+        #    "Center pixel HSV = (%3d, %3d, %3d)" % tuple(hsv[vc, uc]))
+        
+        self.rgb = cv2.cvtColor(blurred, cv2.COLOR_BGR2RGB)
+        
+    def get_perspective_transform_mat(self):
+        if self.last_frame is None:
+            return None
+        
+        # Detect the Aruco markers (using the 4X4 dictionary).
+        markerCorners, markerIds, _ = cv2.aruco.detectMarkers(
+            self.last_frame, cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50))
 
+        # Abort if not all markers are detected.
+        if (markerIds is None or len(markerIds) != 4 or
+            set(markerIds.flatten()) != set([1,2,3,4])):
+            return None
+
+        # Determine the center of the marker pixel coordinates.
+        uvMarkers = np.zeros((4,2), dtype='float32')
+        for i in range(4):
+            uvMarkers[markerIds[i]-1,:] = np.mean(markerCorners[i], axis=1)
+
+        # Calculate the matching World coordinates of the 4 Aruco markers.
+        DX = 1.184 # horizontal center-center of table aruco markers
+        DY = 0.4985 # vertical center-center of table aruco markers
+        xyMarkers = np.float32([[self.x0+dx, self.y0+dy] for (dx, dy) in
+                                [(-DX, DY), (DX, DY), (-DX, -DY), (DX, -DY)]])
+
+        # return the perspective transform.
+        return cv2.getPerspectiveTransform(uvMarkers, xyMarkers)
     
     def detect_board(self, img):
         blurred = cv2.GaussianBlur(img, (5, 5), 0)
@@ -267,11 +305,6 @@ class DetectorNode(Node):
         binary = cv2.dilate(binary, None, iterations=1)
         binary = cv2.erode(binary, None, iterations=6)
         binary = cv2.dilate(binary, None, iterations=1)
-
-        if color == Color.GREEN:
-            self.pub_green_mask.publish(self.bridge.cv2_to_imgmsg(binary))
-        else:
-            self.pub_brown_mask.publish(self.bridge.cv2_to_imgmsg(binary))
         
         # Find contours in the mask
         (contours, hierarchy) = cv2.findContours(
@@ -281,22 +314,28 @@ class DetectorNode(Node):
         # also want to loop over the contours...
         checkers = []
         if len(contours) > 0:
-            x0, y0 = 0.0, 0.387
             contours = sorted(contours, key=cv2.contourArea, reverse=True)
             i = 0
             for contour in contours:
                 if i > 14: # only consider the 15 largest contours
                     break
-                (u, v), _ = cv2.minEnclosingCircle(contour)
-                xy = pixelToWorld(img, int(u), int(v), x0, y0)
+                (u,v), radius = cv2.minEnclosingCircle(contour)
+                if self.rgb is not None: # draw circles on the imshow frame
+                    self.rgb = cv2.circle(self.rgb, (int(u),int(v)), int(radius), (50, 255, 20), 2)
+                    cv2.imshow('test', self.rgb)
+                    cv2.waitKey(1)
+                xy = perspectiveTransform(self.M, int(u), int(v))
                 if xy is not None:
                     [x, y] = xy
                     checkers.append([x, y])
             checkers = np.array(checkers)
-            print('checkers',checkers)
             self.publish_checkers(checkers, color)
         
-
+        if color == Color.GREEN:
+            self.pub_green_mask.publish(self.bridge.cv2_to_imgmsg(binary))
+        else:
+            self.pub_brown_mask.publish(self.bridge.cv2_to_imgmsg(binary))
+        
     def publish_checkers(self, checkers, color:Color):
         checkerarray = PoseArray()
         if len(checkers > 0):
@@ -314,10 +353,19 @@ class DetectorNode(Node):
         # TODO
         pass
 
-    def publish_board_pose(self, boardxyt):
+    def publish_board_pose(self):
         '''
         
         '''
+        if self.last_frame is None:
+            return None
+        
+        boardxyt = self.get_board_XYT()
+
+        if boardxyt is None:
+            return None
+
+
         p1 = pxyz(boardxyt[0,0], boardxyt[0,1], 0.005)
         R1 = Rotz(boardxyt[0,2])
         board1pose = Pose_from_T(T_from_Rp(R1,p1))
@@ -330,45 +378,56 @@ class DetectorNode(Node):
         boardposes.poses.append(board1pose)
         boardposes.poses.append(board2pose)
 
+        print('p1',p1,'p2',p2)
+
         self.pub_board.publish(boardposes)
 
+    def get_board_XYT(self):
+        '''
+        try using aruco.estimateposesinglemarkers?
+        '''
+        if self.last_frame is None:
+            return None
+
+        markerCorners, markerIds, _ = cv2.aruco.detectMarkers(
+            self.last_frame, cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_50))
+
+        # Abort if not both markers detected.
+        if (markerIds is None or len(markerIds) != 2):
+            return None
+
+        # Determine the center of the marker pixel coordinates.
+        uvMarkers = np.zeros((2,2), dtype='float32')
+        for i in np.arange(len(markerIds)):
+            uvMarkers[markerIds[i]-3,:] = np.mean(markerCorners[i], axis=1)
+
+        xytMarkers = np.zeros((2,3))
+        for i in np.arange(len(markerIds)):
+            xy = perspectiveTransform(self.M, uvMarkers[i,0], uvMarkers[i,1])
+            if xy is not None:
+                print('xy',xy)
+                (x, y) = xy
+                xytMarkers[i,:2] = [x, y]
+            corners = markerCorners[i][0]
+            singlecorner = [corners[0][1], corners[0][0]]
+            cornerxy = perspectiveTransform(self.M, singlecorner[0], singlecorner[1])
+            print('cornerxy',cornerxy)
+            if cornerxy is not None:
+                (cx, cy) = cornerxy
+                cx = cx - x
+                cy = cy - y
+                xytMarkers[i,2] = np.arctan2(cy, cx) - np.pi/4
+
+        return xytMarkers    
 
 # helper functions
-def getBoardXYT(image, x0, y0, annotateImage=True):
-    '''
-    try using aruco.estimateposesinglemarkers?
-    '''
-    markerCorners, markerIds, _ = cv2.aruco.detectMarkers(
-        image, cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_50))
-    if annotateImage:
-        cv2.aruco.drawDetectedMarkers(image, markerCorners, markerIds)
 
-    # Abort if not both markers detected.
-    if (markerIds is None or len(markerIds) != 2 or
-        set(markerIds.flatten()) != set([1,2])):
-        return None
+def perspectiveTransform(M,u,v):
+    # Map the object in question.
+    uvObj = np.float32([u, v])
+    xyObj = cv2.perspectiveTransform(uvObj.reshape(1,1,2), M).reshape(2)
 
-    # Determine the center of the marker pixel coordinates.
-    uvMarkers = np.zeros((2,2), dtype='float32')
-    for i in range(2):
-        uvMarkers[markerIds[i]-1,:] = np.mean(markerCorners[i], axis=1)
-
-    xytMarkers = np.zeros((2,3))
-    for i in range(2):
-        xy = pixelToWorld(image, uvMarkers[i,0], uvMarkers[i,1], x0, y0)
-        if xy is not None:
-            (x, y) = xy
-            xytMarkers[i,:2] = [x, y]
-        
-        singlecorner = markerCorners[i,0]
-        cornerxy = pixelToWorld(image, singlecorner[0], singlecorner[1], x0, y0)
-        if cornerxy is not None:
-            (cx, cy) = cornerxy
-            cx = cx - x
-            cy = cy - y
-            xytMarkers[i,2] = np.arctan2(cy, cx) - np.pi/4
-
-    return xytMarkers
+    return xyObj
 
 def pixelToWorld(image, u, v, x0, y0, annotateImage=True):
     '''
