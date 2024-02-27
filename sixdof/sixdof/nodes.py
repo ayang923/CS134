@@ -160,7 +160,7 @@ class DetectorNode(Node):
         self.rcvtopimg = self.create_subscription(Image, '/usb_cam/image_raw',
                                                  self.process_top_images, 3)
         
-        self.rcvtipimg = self.create_subscription(Image, 'tip_cam/image_raw',
+        self.rcvtipimg = self.create_subscription(Image, '/tip_cam/image_raw',
                                                   self.process_tip_images, 3)
         
         # Publishers for detected features:
