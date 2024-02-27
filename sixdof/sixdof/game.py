@@ -124,16 +124,26 @@ class GameDriver():
         TODO
         '''
         pass
-'''       
-    def recvpoint(self, pointmsg):
-        if self.task_handler.tasks:
-            return
 
-        # Extract the data.
-        pos = [pointmsg.x, pointmsg.y, pointmsg.z]
-
-        print("FOUND CHECKER AT ({:.2f}, {:.2f}, {:.2f})".format(pos[0], pos[1], pos[2]),
-              flush=True)
-        
-        self.task_handler.pick_and_drop(pos)
-'''
+    def determine_action(self):
+        '''
+        given current knowledge of the gameboard + current state, figure out
+        what to do next?
+        this is where all of the actual "game logic" is held? basically a black
+        box rn but this is probably the abstraction we eventually want?
+        Proposed "flow":
+        if it is my turn:
+            if I am in the middle of an action:
+                has anything happened that would make my intended action impossible?
+                if yes: put piece back, evaluate board
+                else: continue queued trajectories
+            else (i have not acted yet):
+                check previous dice roll and verify gamestate is a legal
+                progression from the previous turn's gamestate
+                "roll dice" (either abstracted rng or queue up trajectories)
+                offload dice roll to decision engine which sends back intended move
+                queue up trajectories necessary for these move(s)
+        else:
+            wait for my turn in the init position
+        '''
+        pass

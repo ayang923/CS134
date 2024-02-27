@@ -105,7 +105,7 @@ class TrajectoryNode(Node):
         self.t = self.get_time()
          # Compute the desired joint positions and velocities for this time.
         
-        # insert some sort of "check game state and figure out what I want to do?"
+        GameDriver.determine_action()
 
         desired = self.task_handler.evaluate_task(self.t, 1 / RATE)
         if desired is None:
@@ -270,16 +270,18 @@ class DetectorNode(Node):
         # also want to loop over the contours...
         checkers = np.array([[]])
         if len(contours) > 0:
-            # Pick the largest contour.
-            contour = max(contours, key=cv2.contourArea)
             x0, y0 = 0.0, 0.387
-
-            center, _ = cv2.minEnclosingCircle(contour)
-            xy = self.pixelToWorld(hsv, float(center[0]), float(center[1]), x0, y0)
-            if xy is not None:
-                (x, y) = xy
-                checkers = np.append(checkers, [x, y])
-        
+            contours = sorted(contours, key=cv2.contourArea, reverse=True)
+            i = 0
+            for contour in contours:
+                if i > 14: # only consider the 15 largest contours
+                    break
+                center, _ = cv2.minEnclosingCircle(contour)
+                xy = self.pixelToWorld(hsv, float(center[0]), float(center[1]), x0, y0)
+                if xy is not None:
+                    (x, y) = xy
+                    checkers = np.append(checkers, [x, y])
+            
         self.publish_checkers(checkers, color)
 
     def publish_checkers(self, checkers, color):
