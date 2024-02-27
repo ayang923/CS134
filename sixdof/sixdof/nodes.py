@@ -188,15 +188,19 @@ class DetectorNode(Node):
         self.bridge = cv_bridge.CvBridge()
 
         self.M = None
+        self.Minv = None
         self.last_frame = None
 
         self.rgb = None
 
         self.M_timer = self.create_timer(5, self.get_perspective_transform_mat)
-        self.board_timer = self.create_timer(1, self.publish_board_pose)
+        self.Minv_timer = self.create_timer(5, self.get_inv_perspective_transform_mat)
+        #self.board_timer = self.create_timer(1, self.publish_board_pose)
 
         self.x0 = 0.0
         self.y0 = 0.387
+
+        self.best_board_rect = None
 
     def process_top_images(self, msg):     
         # Confirm the encoding and report.
@@ -255,6 +259,33 @@ class DetectorNode(Node):
         # return the perspective transform.
         return cv2.getPerspectiveTransform(uvMarkers, xyMarkers)
     
+    def get_inv_perspective_transform_mat(self):
+        if self.last_frame is None:
+            return None
+        
+        # Detect the Aruco markers (using the 4X4 dictionary).
+        markerCorners, markerIds, _ = cv2.aruco.detectMarkers(
+            self.last_frame, cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50))
+
+        # Abort if not all markers are detected.
+        if (markerIds is None or len(markerIds) != 4 or
+            set(markerIds.flatten()) != set([1,2,3,4])):
+            return None
+
+        # Determine the center of the marker pixel coordinates.
+        uvMarkers = np.zeros((4,2), dtype='float32')
+        for i in range(4):
+            uvMarkers[markerIds[i]-1,:] = np.mean(markerCorners[i], axis=1)
+
+        # Calculate the matching World coordinates of the 4 Aruco markers.
+        DX = 1.184 # horizontal center-center of table aruco markers
+        DY = 0.4985 # vertical center-center of table aruco markers
+        xyMarkers = np.float32([[self.x0+dx, self.y0+dy] for (dx, dy) in
+                                [(-DX, DY), (DX, DY), (-DX, -DY), (DX, -DY)]])
+
+        # return the perspective transform.
+        return cv2.getPerspectiveTransform(xyMarkers, uvMarkers)
+    
     def detect_board(self, img):
         blurred = cv2.GaussianBlur(img, (5, 5), 0)
         hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
@@ -270,6 +301,7 @@ class DetectorNode(Node):
         # trying to find board, dilating a lot to fill in boundary
         binary_board = cv2.erode(binary, None, iterations=2)
         binary_board = cv2.dilate(binary_board, None, iterations=8)
+        binary_board = cv2.erode(binary_board, None, iterations=2)
 
         contours_board, _ = cv2.findContours(binary_board, cv2.RETR_EXTERNAL,
                                              cv2.CHAIN_APPROX_SIMPLE)
@@ -280,10 +312,47 @@ class DetectorNode(Node):
             # Pick the largest contour.
             contour_board = max(contours_board, key=cv2.contourArea)
             cv2.drawContours(board_msk,[contour_board], 0, 1, -1)
-
             # filters out everythign but board
             binary = cv2.bitwise_and(binary, binary, 
                                      mask=board_msk.astype('uint8'))
+
+            # convert largest contour to xy
+            contour_xy = []
+            for point in contour_board:
+                u = point[0][0]
+                v = point[0][1]
+                xy = uvToXY(self.M,u,v)
+                if xy is not None:
+                    [x, y] = xy
+                    contour_xy.append([x, y])
+            contour_xy = np.array(contour_xy, dtype=np.float32)
+            
+            # get min area rect in xy
+            bound = cv2.minAreaRect(contour_xy)
+
+            # filter
+            if self.best_board_rect is None:
+                self.best_board_rect = bound
+            else:
+                alpha = 0.01
+                self.best_board_rect = (
+                alpha * np.array(bound[0]) + (1 - alpha) * np.array(self.best_board_rect[0]),
+                alpha * np.array(bound[1]) + (1 - alpha) * np.array(self.best_board_rect[1]),
+                alpha * bound[2] + (1 - alpha) * self.best_board_rect[2])
+            smoothed = cv2.boxPoints(self.best_board_rect)
+            
+            # draw filtered fit rect from xy in uv space
+            rect_uv = []
+            for xy in smoothed:
+                print(xy)
+                x = xy[0]
+                y = xy[1]
+                uv = xyToUV(self.Minv,x,y)
+                if uv is not None:
+                    [u, v] = uv
+                    rect_uv.append([u,v])
+            rect_uv = np.array(rect_uv)
+            cv2.drawContours(self.rgb,rect_uv,0, (0,255,0),2)
 
         self.pub_board_mask.publish(self.bridge.cv2_to_imgmsg(binary))
 
@@ -324,7 +393,7 @@ class DetectorNode(Node):
                     self.rgb = cv2.circle(self.rgb, (int(u),int(v)), int(radius), (50, 255, 20), 2)
                     cv2.imshow('test', self.rgb)
                     cv2.waitKey(1)
-                xy = perspectiveTransform(self.M, int(u), int(v))
+                xy = uvToXY(self.M, int(u), int(v))
                 if xy is not None:
                     [x, y] = xy
                     checkers.append([x, y])
@@ -378,8 +447,6 @@ class DetectorNode(Node):
         boardposes.poses.append(board1pose)
         boardposes.poses.append(board2pose)
 
-        print('p1',p1,'p2',p2)
-
         self.pub_board.publish(boardposes)
 
     def get_board_XYT(self):
@@ -401,16 +468,18 @@ class DetectorNode(Node):
         for i in np.arange(len(markerIds)):
             uvMarkers[markerIds[i]-3,:] = np.mean(markerCorners[i], axis=1)
 
+        print('uvmarkers',uvMarkers)
+
         xytMarkers = np.zeros((2,3))
         for i in np.arange(len(markerIds)):
-            xy = perspectiveTransform(self.M, uvMarkers[i,0], uvMarkers[i,1])
+            xy = uvToXY(self.M, uvMarkers[i,0], uvMarkers[i,1])
             if xy is not None:
                 print('xy',xy)
                 (x, y) = xy
                 xytMarkers[i,:2] = [x, y]
             corners = markerCorners[i][0]
-            singlecorner = [corners[0][1], corners[0][0]]
-            cornerxy = perspectiveTransform(self.M, singlecorner[0], singlecorner[1])
+            singlecorner = [corners[0][0], corners[0][1]]
+            cornerxy = uvToXY(self.M, singlecorner[0], singlecorner[1])
             print('cornerxy',cornerxy)
             if cornerxy is not None:
                 (cx, cy) = cornerxy
@@ -422,12 +491,19 @@ class DetectorNode(Node):
 
 # helper functions
 
-def perspectiveTransform(M,u,v):
+def uvToXY(M,u,v):
     # Map the object in question.
     uvObj = np.float32([u, v])
     xyObj = cv2.perspectiveTransform(uvObj.reshape(1,1,2), M).reshape(2)
 
     return xyObj
+
+def xyToUV(M,x,y):
+    # Map the object in question.
+    xyObj = np.float32([x, y])
+    uvObj = cv2.perspectiveTransform(xyObj.reshape(1,1,2), M).reshape(2)
+
+    return uvObj
 
 def pixelToWorld(image, u, v, x0, y0, annotateImage=True):
     '''
