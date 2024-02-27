@@ -52,21 +52,6 @@ class TrajectoryNode(Node):
         # /joint_states from Hebi node
         self.fbksub = self.create_subscription(JointState, '/joint_states',
                                                self.recvfbk, 100)
-        # /boardpose from Detector
-        self.sub_board = self.create_subscription(PoseArray, '/boardpose',
-                                                  self.recvboard, 3)
-
-        # Poses of all detected green checkers, /green from Detector
-        self.sub_green = self.create_subscription(PoseArray, '/green',
-                                                  self.recvgreen, 3)
-
-        # Poses of all detected brown checkers, /brown from Detector
-        self.sub_brown = self.create_publisher(PoseArray, '/brown',
-                                               self.recvbrown, 3)
-
-        # /dice Unsigned int array with value of two detected dice from Detector
-        self.sub_dice = self.create_publisher(UInt8MultiArray, '/dice',
-                                              self.recvdice, 3)
 
         # creates task handler for robot
         self.task_handler = TaskHandler(self, np.array(self.position0).reshape(-1, 1))
@@ -75,23 +60,6 @@ class TrajectoryNode(Node):
 
         # game driver for trajectory node
         self.game_driver = GameDriver(self, self.task_handler)
-
-        # Stored gamestate info
-        self.board1pose = 0
-        self.board2pose = 0
-        # Initial gamestate area assumes setup for beginning of game
-        # each element indicates [num_green, num_brown]
-        # beginning to end of array progresses ccw from robot upper right
-        self.gamestate = np.array([[2,0], [0,0], [0,0], [0,0], [0,0], [0,5],
-                                   [0,0], [0,3], [0,0], [0,0], [0,0], [5,0],
-                                   [0,5], [0,0], [0,0], [0,0], [3,0], [0,0],
-                                   [5,0], [0,0], [0,0], [0,0], [0,0], [0,2]])
-        # self.recvgreen populates these arrays with detected green checker pos
-        self.greenpos = np.array([[]])
-        # self.recvbrown populates these arrays with detected brown checker pos
-        self.brownpos = np.array([[]])
-        # self.recvdice populates this with detected [die1_int, die2_int]
-        self.dice = np.array([])
 
         # Create a timer to keep calculating/sending commands.
         rate       = RATE
@@ -105,18 +73,6 @@ class TrajectoryNode(Node):
     # Called repeatedly by incoming messages - do nothing for now
     def recvfbk(self, fbkmsg):
         self.actpos = list(fbkmsg.position)
-
-    def recvboard(self, msg):
-        pass
-
-    def recvgreen(self, msg):
-        pass
-
-    def recvbrown(self, msg):
-        pass
-
-    def recvdice(self, msg):
-        pass    
 
     # Shutdown
     def shutdown(self):
@@ -148,6 +104,9 @@ class TrajectoryNode(Node):
     def update(self):
         self.t = self.get_time()
          # Compute the desired joint positions and velocities for this time.
+        
+        # insert some sort of "check game state and figure out what I want to do?"
+
         desired = self.task_handler.evaluate_task(self.t, 1 / RATE)
         if desired is None:
             self.future.set_result("Trajectory has ended")
@@ -199,14 +158,14 @@ class DetectorNode(Node):
 
         #subscribers for raw images
         self.rcvtopimg = self.create_subscription(Image, '/usb_cam/image_raw',
-                                                 self.process_top_images, 1)
+                                                 self.process_top_images, 3)
         
         self.rcvtipimg = self.create_subscription(Image, 'tip_cam/image_raw',
-                                                  self.process_tip_images, 1)
+                                                  self.process_tip_images, 3)
         
         # Publishers for detected features:
         # Poses of two halves of game board
-        self.pubboard = self.create_publisher(PoseArray, '/boardpose', 3)
+        self.pub_board = self.create_publisher(PoseArray, '/boardpose', 3)
 
         # Poses of all detected green checkers
         self.pub_green = self.create_publisher(PoseArray, '/green', 3)
@@ -217,67 +176,23 @@ class DetectorNode(Node):
         self.pub_dice = self.create_publisher(UInt8MultiArray, '/dice', 3)
         
         #publisher for debugging images
-        self.pubmask = self.create_publisher(Image, '/usb_cam/binary',    3)
+        self.pub_mask = self.create_publisher(Image, '/usb_cam/binary', 3)
 
 
         self.bridge = cv_bridge.CvBridge()
 
-'''
-def process_top(self, msg):
-        # Confirm the encoding and report.
-        assert(msg.encoding == "rgb8")
-        # self.get_logger().info(
-        #     "Image %dx%d, bytes/pixel %d, encoding %s" %
-        #     (msg.width, msg.height, msg.step/msg.width, msg.encoding))
-
-        # Convert into OpenCV image, using RGB 8-bit (pass-through).
-        frame = self.bridge.imgmsg_to_cv2(msg, "passthrough")
-
-        # Convert to HSV
-        #hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
-
-        # Threshold in Hmin/max, Smin/max, Vmin/max
-        binary = cv2.inRange(hsv, self.checker_limits[:, 0], self.checker_limits[:, 1])
-
-        # Erode and Dilate. Definitely adjust the iterations!
-        iter = 4
-        binary = cv2.erode( binary, None, iterations=iter)
-        binary = cv2.dilate(binary, None, iterations=2*iter)
-        binary = cv2.erode( binary, None, iterations=iter)
-
-        # Find contours in the mask and initialize the current
-        # (x, y) center of the ball
-        (contours, hierarchy) = cv2.findContours(
-            binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        # Only proceed if at least one contour was found.  You may
-        # also want to loop over the contours...
-        if len(contours) > 0:
-            # Pick the largest contour.
-            contour = max(contours, key=cv2.contourArea)
-            x0, y0 = 0.0, 0.387
-
-            ((ur, vr), (w, h), theta) = cv2.minAreaRect(contour)
-            xy = self.pixelToWorld(frame, ur, vr, x0, y0)
-
-            if xy is not None:
-                (x, y) = xy
-                point_msg = Point()
-                point_msg.x = float(x)
-                point_msg.y = float(y)
-                point_msg.z = 0.006
-
-                self.pubpoints.publish(point_msg)
-'''
-
     def process_top_images(self, msg):
+        x0, y0 = 0.0, 0.387
+        
         # Confirm the encoding and report.
         assert(msg.encoding == "rgb8")
 
 
         # Convert into OpenCV image, using RGB 8-bit (pass-through).
         frame = self.bridge.imgmsg_to_cv2(msg, "passthrough")
+
+        boardxyt = getBoardXYT(frame, x0, y0)
+        self.publish_board_pos(boardxyt) # send board PoseArray to /boardpose
 
         # Convert to HSV
         #hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
@@ -293,6 +208,18 @@ def process_top(self, msg):
         blurred = cv2.line(blurred, (uc,0), (uc,H-1), (255, 255, 255), 5)
         blurred = cv2.line(blurred, (0,vc), (W-1,vc), (255, 255, 255), 5)
 
+
+        self.detect_board(hsv)
+
+        self.detect_checkers(hsv, 'green')
+        self.detect_checkers(hsv, 'brown')
+
+        # binary = cv2.erode( binary, None, iterations=iter)
+        self.get_logger().info(
+            "Center pixel HSV = (%3d, %3d, %3d)" % tuple(hsv[vc, uc]))
+
+    
+    def detect_board(self, hsv):
         # Threshold in Hmin/max, Smin/max, Vmin/max
         binary_yellow = cv2.inRange(hsv, YELLOW_BOARD_LIMITS[:, 0], YELLOW_BOARD_LIMITS[:, 1])
         binary_red = cv2.inRange(hsv, RED_BOARD_LIMITS[:, 0], RED_BOARD_LIMITS[:, 1])
@@ -318,25 +245,128 @@ def process_top(self, msg):
             # detecting checkers
             binary_checkers = cv2.dilate(binary, None, iterations=2)
 
-        # binary = cv2.erode( binary, None, iterations=iter)
-        self.get_logger().info(
-            "Center pixel HSV = (%3d, %3d, %3d)" % tuple(hsv[vc, uc]))
+        self.pub_mask.publish(self.bridge.cv2_to_imgmsg(binary_checkers))
 
-        self.pubmask.publish(self.bridge.cv2_to_imgmsg(binary_checkers))
+    def detect_checkers(self, hsv, color):
+        if color == 'green':
+            limits = self.green_checker_limits
+        else:
+            limits = self.brown_checker_limits
+
+        binary = cv2.inRange(hsv, limits[:, 0], limits[:, 1])
 
         # Erode and Dilate. Definitely adjust the iterations!
+        # probably need to erode a lot to make it recognize neighboring circles
+        iter = 4
+        binary = cv2.erode(binary, None, iterations=iter)
+        binary = cv2.dilate(binary, None, iterations=2*iter)
+        binary = cv2.erode(binary, None, iterations=2*iter)
 
+        # Find contours in the mask
+        (contours, hierarchy) = cv2.findContours(
+            binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # # Find contours in the mask and initialize the current
-        # # (x, y) center of the ball
-        # (contours, hierarchy) = cv2.findContours(
-        #     binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
+        # Only proceed if at least one contour was found.  You may
+        # also want to loop over the contours...
+        checkers = np.array([[]])
+        if len(contours) > 0:
+            # Pick the largest contour.
+            contour = max(contours, key=cv2.contourArea)
+            x0, y0 = 0.0, 0.387
+
+            center, _ = cv2.minEnclosingCircle(contour)
+            xy = self.pixelToWorld(hsv, float(center[0]), float(center[1]), x0, y0)
+            if xy is not None:
+                (x, y) = xy
+                checkers = np.append(checkers, [x, y])
+        
+        self.publish_checkers(checkers, color)
+
+    def publish_checkers(self, checkers, color):
+        checkerarray = PoseArray()
+        for checker in checkers:
+            checkerpose = Pose()
+            checkerpose.position.x = checker[0]
+            checkerpose.position.y = checker[1]
+            checkerpose.position.z = 0 # TODO height of board
+            checkerpose.orientation.x = 0
+            checkerpose.orientation.y = 0
+            checkerpose.orientation.z = 0
+            checkerpose.orientation.w = 0
+            checkerarray.poses.append(checkerpose)
+        if color == 'green':
+            self.pub_green.publish(checkerarray)
+        else:
+            self.pub_brown.publish(checkerarray)
+
     def process_tip_images(self, msg):
+        # TODO
         pass
+
+    def publish_board_pos(self, boardxyt):
+        # TODO convert from xytheta into pose msg
+        board1pose = Pose()
+        board1pose.position.x = 0
+        board1pose.position.y = 0
+        board1pose.position.z = 0 # board thickness
+        board1pose.orientation.x = 0
+        board1pose.orientation.y = 0
+        board1pose.orientation.z = 0
+        board1pose.orientation.w = 0
+
+        board2pose = Pose()
+        board2pose.position.x = 0
+        board2pose.position.y = 0
+        board2pose.position.z = 0 # board thickness
+        board2pose.orientation.x = 0
+        board2pose.orientation.y = 0
+        board2pose.orientation.z = 0
+        board2pose.orientation.w = 0
+
+        boardposes = PoseArray()
+        boardposes.poses.append(board1pose)
+        boardposes.poses.append(board2pose)
+
+        self.pub_board.publish(boardposes)
 
 
 # helper functions
+def getBoardXYT(image, x0, y0, annotateImage=True):
+    '''
+    try using aruco.estimateposesinglemarkers?
+    '''
+    markerCorners, markerIds, _ = cv2.aruco.detectMarkers(
+        image, cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_50))
+    if annotateImage:
+        cv2.aruco.drawDetectedMarkers(image, markerCorners, markerIds)
+
+    # Abort if not both markers detected.
+    if (markerIds is None or len(markerIds) != 2 or
+        set(markerIds.flatten()) != set([1,2])):
+        return None
+
+    # Determine the center of the marker pixel coordinates.
+    uvMarkers = np.zeros((2,2), dtype='float32')
+    for i in range(2):
+        uvMarkers[markerIds[i]-1,:] = np.mean(markerCorners[i], axis=1)
+
+    xytMarkers = np.zeros((2,3))
+    for i in range(2):
+        xy = pixelToWorld(image, uvMarkers[i,0], uvMarkers[i,1], x0, y0)
+        if xy is not None:
+            (x, y) = xy
+            xytMarkers[i,:2] = [x, y]
+        
+        singlecorner = markerCorners[i,0]
+        cornerxy = pixelToWorld(image, singlecorner[0], singlecorner[1], x0, y0)
+        if cornerxy is not None:
+            (cx, cy) = cornerxy
+            cx = cx - x
+            cy = cy - y
+            xytMarkers[i,2] = np.arctan2(cy, cx) - np.pi/4
+
+    return xytMarkers
+
 def pixelToWorld(image, u, v, x0, y0, annotateImage=True):
     '''
     Convert the (u,v) pixel position into (x,y) world coordinates
@@ -372,8 +402,8 @@ def pixelToWorld(image, u, v, x0, y0, annotateImage=True):
         uvMarkers[markerIds[i]-1,:] = np.mean(markerCorners[i], axis=1)
 
     # Calculate the matching World coordinates of the 4 Aruco markers.
-    DX = 0.1016
-    DY = 0.06985
+    DX = 1.184 # horizontal center-center of table aruco markers
+    DY = 0.4985 # vertical center-center of table aruco markers
     xyMarkers = np.float32([[x0+dx, y0+dy] for (dx, dy) in
                             [(-DX, DY), (DX, DY), (-DX, -DY), (DX, -DY)]])
 
