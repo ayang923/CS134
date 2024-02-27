@@ -1,0 +1,49 @@
+[2.478s] Invoking command in '/home/robot/repo/src/build/sixdof': PYTHONPATH=/home/robot/repo/src/build/sixdof/prefix_override:/home/robot/repo/src/install/sixdof/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 setup.py develop --editable --build-directory /home/robot/repo/src/build/sixdof/build --no-deps install_data
+[3.045s] running develop
+[3.046s] /usr/lib/python3/dist-packages/setuptools/command/easy_install.py:158: EasyInstallDeprecationWarning: easy_install command is deprecated. Use build and pip and other standards-based tools.
+[3.046s]   warnings.warn(
+[3.049s] /usr/lib/python3/dist-packages/setuptools/command/install.py:34: SetuptoolsDeprecationWarning: setup.py install is deprecated. Use build and pip and other standards-based tools.
+[3.049s]   warnings.warn(
+[3.592s] running egg_info
+[3.593s] creating sixdof.egg-info
+[3.593s] writing sixdof.egg-info/PKG-INFO
+[3.594s] writing dependency_links to sixdof.egg-info/dependency_links.txt
+[3.594s] writing entry points to sixdof.egg-info/entry_points.txt
+[3.595s] writing requirements to sixdof.egg-info/requires.txt
+[3.595s] writing top-level names to sixdof.egg-info/top_level.txt
+[3.596s] writing manifest file 'sixdof.egg-info/SOURCES.txt'
+[3.599s] reading manifest file 'sixdof.egg-info/SOURCES.txt'
+[3.600s] writing manifest file 'sixdof.egg-info/SOURCES.txt'
+[3.602s] running build_ext
+[3.603s] Creating /home/robot/repo/src/install/sixdof/lib/python3.10/site-packages/sixdof.egg-link (link to .)
+[3.604s] Installing detectors script to /home/robot/repo/src/install/sixdof/lib/sixdof
+[3.605s] Installing main script to /home/robot/repo/src/install/sixdof/lib/sixdof
+[3.605s] 
+[3.606s] Installed /home/robot/repo/src/build/sixdof
+[3.606s] running install_data
+[3.606s] creating /home/robot/repo/src/install/sixdof/share/ament_index
+[3.606s] creating /home/robot/repo/src/install/sixdof/share/ament_index/resource_index
+[3.607s] creating /home/robot/repo/src/install/sixdof/share/ament_index/resource_index/packages
+[3.607s] copying resource/sixdof -> /home/robot/repo/src/install/sixdof/share/ament_index/resource_index/packages
+[3.608s] copying package.xml -> /home/robot/repo/src/install/sixdof/share/sixdof
+[3.608s] creating /home/robot/repo/src/install/sixdof/share/sixdof/launch
+[3.608s] copying launch/detectors.launch.py -> /home/robot/repo/src/install/sixdof/share/sixdof/launch
+[3.609s] copying launch/main.launch.py -> /home/robot/repo/src/install/sixdof/share/sixdof/launch
+[3.609s] copying launch/viewactual.launch.py -> /home/robot/repo/src/install/sixdof/share/sixdof/launch
+[3.609s] copying launch/viewcommand.launch.py -> /home/robot/repo/src/install/sixdof/share/sixdof/launch
+[3.610s] copying launch/showurdf.launch.py -> /home/robot/repo/src/install/sixdof/share/sixdof/launch
+[3.610s] creating /home/robot/repo/src/install/sixdof/share/sixdof/rviz
+[3.610s] copying rviz/viewurdf.rviz -> /home/robot/repo/src/install/sixdof/share/sixdof/rviz
+[3.621s] creating /home/robot/repo/src/install/sixdof/share/sixdof/meshes
+[3.622s] copying meshes/gripper.STL -> /home/robot/repo/src/install/sixdof/share/sixdof/meshes
+[3.636s] copying meshes/wristbracket.STL -> /home/robot/repo/src/install/sixdof/share/sixdof/meshes
+[3.637s] copying meshes/basiclink.dae -> /home/robot/repo/src/install/sixdof/share/sixdof/meshes
+[3.638s] copying meshes/upperarm.STL -> /home/robot/repo/src/install/sixdof/share/sixdof/meshes
+[3.702s] copying meshes/X8.stl -> /home/robot/repo/src/install/sixdof/share/sixdof/meshes
+[3.719s] copying meshes/basiclink.stl -> /home/robot/repo/src/install/sixdof/share/sixdof/meshes
+[3.720s] copying meshes/lowerarm.STL -> /home/robot/repo/src/install/sixdof/share/sixdof/meshes
+[3.722s] copying meshes/basebracket.STL -> /home/robot/repo/src/install/sixdof/share/sixdof/meshes
+[3.723s] copying meshes/X5.stl -> /home/robot/repo/src/install/sixdof/share/sixdof/meshes
+[3.740s] creating /home/robot/repo/src/install/sixdof/share/sixdof/urdf
+[3.740s] copying urdf/fivedof.urdf -> /home/robot/repo/src/install/sixdof/share/sixdof/urdf
+[3.923s] Invoked command in '/home/robot/repo/src/build/sixdof' returned '0': PYTHONPATH=/home/robot/repo/src/build/sixdof/prefix_override:/home/robot/repo/src/install/sixdof/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 setup.py develop --editable --build-directory /home/robot/repo/src/build/sixdof/build --no-deps install_data

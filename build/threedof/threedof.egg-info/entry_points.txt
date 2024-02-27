@@ -1,0 +1,5 @@
+[console_scripts]
+goals3 = threedof.goals3:main
+goals4 = threedof.goals4:main
+gravitycomp = threedof.gravitycomp:main
+

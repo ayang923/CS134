@@ -1,0 +1,32 @@
+[2.213s] Invoking command in '/home/robot/repo/src/build/demo134': PYTHONPATH=/home/robot/repo/src/build/demo134/prefix_override:/home/robot/repo/src/install/demo134/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 setup.py develop --editable --build-directory /home/robot/repo/src/build/demo134/build --no-deps install_data
+[2.706s] running develop
+[2.707s] /usr/lib/python3/dist-packages/setuptools/command/easy_install.py:158: EasyInstallDeprecationWarning: easy_install command is deprecated. Use build and pip and other standards-based tools.
+[2.707s]   warnings.warn(
+[2.709s] /usr/lib/python3/dist-packages/setuptools/command/install.py:34: SetuptoolsDeprecationWarning: setup.py install is deprecated. Use build and pip and other standards-based tools.
+[2.709s]   warnings.warn(
+[3.083s] running egg_info
+[3.084s] creating demo134.egg-info
+[3.084s] writing demo134.egg-info/PKG-INFO
+[3.085s] writing dependency_links to demo134.egg-info/dependency_links.txt
+[3.085s] writing entry points to demo134.egg-info/entry_points.txt
+[3.086s] writing requirements to demo134.egg-info/requires.txt
+[3.086s] writing top-level names to demo134.egg-info/top_level.txt
+[3.087s] writing manifest file 'demo134.egg-info/SOURCES.txt'
+[3.090s] reading manifest file 'demo134.egg-info/SOURCES.txt'
+[3.091s] writing manifest file 'demo134.egg-info/SOURCES.txt'
+[3.094s] running build_ext
+[3.095s] Creating /home/robot/repo/src/install/demo134/lib/python3.10/site-packages/demo134.egg-link (link to .)
+[3.096s] Installing demo134 script to /home/robot/repo/src/install/demo134/lib/demo134
+[3.096s] Installing goals2 script to /home/robot/repo/src/install/demo134/lib/demo134
+[3.097s] 
+[3.097s] Installed /home/robot/repo/src/build/demo134
+[3.097s] running install_data
+[3.098s] creating /home/robot/repo/src/install/demo134/share/ament_index
+[3.098s] creating /home/robot/repo/src/install/demo134/share/ament_index/resource_index
+[3.098s] creating /home/robot/repo/src/install/demo134/share/ament_index/resource_index/packages
+[3.098s] copying resource/demo134 -> /home/robot/repo/src/install/demo134/share/ament_index/resource_index/packages
+[3.099s] copying package.xml -> /home/robot/repo/src/install/demo134/share/demo134
+[3.099s] creating /home/robot/repo/src/install/demo134/share/demo134/launch
+[3.099s] copying launch/demo134.launch.py -> /home/robot/repo/src/install/demo134/share/demo134/launch
+[3.099s] copying launch/goals2.launch.py -> /home/robot/repo/src/install/demo134/share/demo134/launch
+[3.152s] Invoked command in '/home/robot/repo/src/build/demo134' returned '0': PYTHONPATH=/home/robot/repo/src/build/demo134/prefix_override:/home/robot/repo/src/install/demo134/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 setup.py develop --editable --build-directory /home/robot/repo/src/build/demo134/build --no-deps install_data

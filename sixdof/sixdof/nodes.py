@@ -21,7 +21,7 @@ RATE = 100.0            # Hertz
 nan = float("nan")
 
 GREEN_CHECKER_LIMITS = np.array(([10, 70], [30, 90], [10, 70]))
-BROWN_CHECKER_LIMITS = np.array(([80, 120], [140, 200], [180, 255]))
+BROWN_CHECKER_LIMITS = np.array(([100, 120], [100, 130], [60, 90]))
 YELLOW_BOARD_LIMITS = np.array([[80, 120], [100, 220], [140, 180]])
 RED_BOARD_LIMITS = np.array([[100, 140], [160, 240], [100, 180]])
 
@@ -176,11 +176,14 @@ class DetectorNode(Node):
         self.pub_dice = self.create_publisher(UInt8MultiArray, '/dice', 3)
         
         #publishers for debugging images
-        self.pub_board_mask = self.create_publisher(Image, '/usb_cam/board_binary', 3)
+        self.pub_board_mask = self.create_publisher(Image, 
+                                                    '/usb_cam/board_binary', 3)
 
-        self.pub_green_mask = self.create_publisher(Image, '/usb_cam/green_checker_binary')
+        self.pub_green_mask = self.create_publisher(Image, 
+                                                    '/usb_cam/green_checker_binary', 3)
 
-        self.pub_brown_mask = self.create_publisher(Image, '/usb_cam/brown_checker_binary')
+        self.pub_brown_mask = self.create_publisher(Image, 
+                                                    '/usb_cam/brown_checker_binary', 3)
 
 
         self.bridge = cv_bridge.CvBridge()
@@ -191,42 +194,38 @@ class DetectorNode(Node):
         # Confirm the encoding and report.
         assert(msg.encoding == "rgb8")
 
-
         # Convert into OpenCV image, using RGB 8-bit (pass-through).
         frame = self.bridge.imgmsg_to_cv2(msg, "passthrough")
 
-        boardxyt = getBoardXYT(frame, x0, y0)
-        self.publish_board_pose(boardxyt) # send board PoseArray to /boardpose
-
-        # Convert to HSV
-        #hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+        #boardxyt = getBoardXYT(frame, x0, y0)
+        #self.publish_board_pose(boardxyt) # send board PoseArray to /boardpose
 
         blurred = cv2.GaussianBlur(frame, (5, 5), 0)
         hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
-
 
         (H, W, D) = blurred.shape
         uc = W//2
         vc = H//2
 
-        blurred = cv2.line(blurred, (uc,0), (uc,H-1), (255, 255, 255), 5)
-        blurred = cv2.line(blurred, (0,vc), (W-1,vc), (255, 255, 255), 5)
+        self.detect_board(frame)
 
-
-        self.detect_board(hsv)
-
-        self.detect_checkers(hsv, 'green')
-        self.detect_checkers(hsv, 'brown')
+        self.detect_checkers(frame, Color.GREEN)
+        #self.detect_checkers(frame, Color.BROWN)
 
         # binary = cv2.erode( binary, None, iterations=iter)
         self.get_logger().info(
             "Center pixel HSV = (%3d, %3d, %3d)" % tuple(hsv[vc, uc]))
 
     
-    def detect_board(self, hsv):
+    def detect_board(self, img):
+        blurred = cv2.GaussianBlur(img, (5, 5), 0)
+        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
+
         # Threshold in Hmin/max, Smin/max, Vmin/max
-        binary_yellow = cv2.inRange(hsv, YELLOW_BOARD_LIMITS[:, 0], YELLOW_BOARD_LIMITS[:, 1])
-        binary_red = cv2.inRange(hsv, RED_BOARD_LIMITS[:, 0], RED_BOARD_LIMITS[:, 1])
+        binary_yellow = cv2.inRange(hsv, YELLOW_BOARD_LIMITS[:, 0],
+                                    YELLOW_BOARD_LIMITS[:, 1])
+        binary_red = cv2.inRange(hsv, RED_BOARD_LIMITS[:, 0],
+                                 RED_BOARD_LIMITS[:, 1])
 
         binary = cv2.bitwise_or(binary_yellow, binary_red)
         
@@ -234,7 +233,8 @@ class DetectorNode(Node):
         binary_board = cv2.erode(binary, None, iterations=2)
         binary_board = cv2.dilate(binary_board, None, iterations=8)
 
-        contours_board, _ = cv2.findContours(binary_board, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours_board, _ = cv2.findContours(binary_board, cv2.RETR_EXTERNAL,
+                                             cv2.CHAIN_APPROX_SIMPLE)
 
         # finding board contour
         if len(contours_board) > 0:
@@ -244,11 +244,15 @@ class DetectorNode(Node):
             cv2.drawContours(board_msk,[contour_board], 0, 1, -1)
 
             # filters out everythign but board
-            binary = cv2.bitwise_and(binary, binary, mask=board_msk.astype('uint8'))
+            binary = cv2.bitwise_and(binary, binary, 
+                                     mask=board_msk.astype('uint8'))
 
         self.pub_board_mask.publish(self.bridge.cv2_to_imgmsg(binary))
 
-    def detect_checkers(self, hsv, color:Color):
+    def detect_checkers(self, img, color:Color):
+        blurred = cv2.GaussianBlur(img, (5, 5), 0)
+        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
+
         if color == Color.GREEN:
             limits = self.green_checker_limits
         else:
@@ -258,23 +262,24 @@ class DetectorNode(Node):
 
         # Erode and Dilate. Definitely adjust the iterations!
         # probably need to erode a lot to make it recognize neighboring circles
-        iter = 4
-        binary = cv2.erode(binary, None, iterations=iter)
-        binary = cv2.dilate(binary, None, iterations=2*iter)
-        binary = cv2.erode(binary, None, iterations=2*iter)
+        binary = cv2.dilate(binary, None, iterations=2)
+        binary = cv2.erode(binary, None, iterations=2)
+        binary = cv2.dilate(binary, None, iterations=1)
+        binary = cv2.erode(binary, None, iterations=6)
+        binary = cv2.dilate(binary, None, iterations=1)
 
         if color == Color.GREEN:
             self.pub_green_mask.publish(self.bridge.cv2_to_imgmsg(binary))
         else:
             self.pub_brown_mask.publish(self.bridge.cv2_to_imgmsg(binary))
-
+        
         # Find contours in the mask
         (contours, hierarchy) = cv2.findContours(
             binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         # Only proceed if at least one contour was found.  You may
         # also want to loop over the contours...
-        checkers = np.array([[]])
+        checkers = []
         if len(contours) > 0:
             x0, y0 = 0.0, 0.387
             contours = sorted(contours, key=cv2.contourArea, reverse=True)
@@ -282,25 +287,28 @@ class DetectorNode(Node):
             for contour in contours:
                 if i > 14: # only consider the 15 largest contours
                     break
-                center, _ = cv2.minEnclosingCircle(contour)
-                xy = self.pixelToWorld(hsv, float(center[0]), float(center[1]), x0, y0)
+                (u, v), _ = cv2.minEnclosingCircle(contour)
+                xy = pixelToWorld(img, int(u), int(v), x0, y0)
                 if xy is not None:
-                    (x, y) = xy
-                    checkers = np.append(checkers, [x, y])
-            
-        self.publish_checkers(checkers, color)
+                    [x, y] = xy
+                    checkers.append([x, y])
+            checkers = np.array(checkers)
+            print('checkers',checkers)
+            self.publish_checkers(checkers, color)
+        
 
     def publish_checkers(self, checkers, color:Color):
         checkerarray = PoseArray()
-        for checker in checkers:
-            p = pxyz(checker[0], checker[1], 0.005)
-            R = Reye()
-            checkerpose = Pose_from_T(T_from_Rp(R,p))
-            checkerarray.poses.append(checkerpose)
-        if color == Color.GREEN:
-            self.pub_green.publish(checkerarray)
-        else:
-            self.pub_brown.publish(checkerarray)
+        if len(checkers > 0):
+            for checker in checkers:
+                p = pxyz(checker[0], checker[1], 0.005)
+                R = Reye()
+                checkerpose = Pose_from_T(T_from_Rp(R,p))
+                checkerarray.poses.append(checkerpose)
+            if color == Color.GREEN:
+                self.pub_green.publish(checkerarray)
+            else:
+                self.pub_brown.publish(checkerarray)
 
     def process_tip_images(self, msg):
         # TODO
@@ -384,6 +392,8 @@ def pixelToWorld(image, u, v, x0, y0, annotateImage=True):
         image, cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50))
     if annotateImage:
         cv2.aruco.drawDetectedMarkers(image, markerCorners, markerIds)
+
+    print('markerids',markerIds)
 
     # Abort if not all markers are detected.
     if (markerIds is None or len(markerIds) != 4 or
