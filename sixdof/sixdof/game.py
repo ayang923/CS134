@@ -15,6 +15,9 @@ class Color(Enum):
     GREEN = 1
     BROWN = 2
 
+LOCC = 0.3
+LFREE = -0.05
+
 # class passed into trajectory node to handle game logic
 class GameDriver():
     def __init__(self, trajectory_node:Node, task_handler):
@@ -40,7 +43,8 @@ class GameDriver():
         # Representation of physical game board
         self.game_board = GameBoard()
 
-        self.logoddsgrid = np.zeros((25,6)) # TODO log odds representation of occupancy by green/brown
+        # log odds representation of occupancy by [green,brown]
+        self.logoddsgrid = np.zeros((25,6,2))
 
         # Initial gamestate area assumes setup for beginning of game
         # each element indicates [num_green, num_brown]
@@ -52,9 +56,9 @@ class GameDriver():
                                    [5,0], [0,0], [0,0], [0,0], [0,0], [0,2],
                                    [0,0]])
         # self.recvgreen populates these arrays with detected green checker pos
-        self.greenpos = np.array([[]])
+        self.greenpos = None
         # self.recvbrown populates these arrays with detected brown checker pos
-        self.brownpos = np.array([[]])
+        self.brownpos = None
         # self.recvdice populates this with detected [die1_int, die2_int]
         self.dice = np.array([])
 
@@ -82,23 +86,25 @@ class GameDriver():
         self.logoddsgrid (log odds of grid spaces being occupied) using update_log_odds(),
         and self.gamestate (actionable game state representation)
         '''
-        self.greenpos = np.array([[]])
+        self.greenpos = []
         for pose in msg.poses:
             xy = [pose.position.x, pose.position.y]
-            self.greenpos = np.append(self.greenpos, xy)
+            self.greenpos.append(xy)
+        self.greenpos = np.array(self.greenpos)
         self.update_log_odds(Color.GREEN)
-        self.update_gamestate(Color.GREEN)
+        self.update_gamestate()
 
     def recvbrown(self, msg):
         '''
         same as above, but for brown
         '''
-        self.brownpos = np.array([[]])
+        self.brownpos = []
         for pose in msg.poses:
             xy = [pose.position.x, pose.position.y]
-            self.brownpos = np.append(self.brownpos, xy)
+            self.brownpos.append(xy)
+        self.brownpos = np.array(self.brownpos)
         self.update_log_odds(Color.BROWN)
-        self.update_gamestate(Color.BROWN)
+        self.update_gamestate()
 
     def recvdice(self, msg):
         '''
@@ -126,14 +132,43 @@ class GameDriver():
 
         use self.game_board.get_grid_centers() to determine how to increment/decrement the log
         odds grid given the detected checker positions.
+        FIXME
+        '''
+        if self.game_board.centers is None:
+            return None
+
+        if color == Color.GREEN:
+            posarray = self.greenpos
+        else:
+            posarray = self.brownpos
+        for i in np.arange(25):
+            for j in np.arange(6):
+                filled = False
+                center = self.game_board.centers[i][j]
+                for pos in posarray:
+                    if np.sqrt((center[0]-pos[0])**2 + (center[1]-pos[1]**2)) < 0.02:
+                        self.logoddsgrid[i][j][color.value - 1] += LOCC
+                        filled = True
+                        break
+                if filled == False:
+                    self.logoddsgrid[i][j][color.value - 1] += LFREE
+                
+
+    def update_gamestate(self):
+        '''
         TODO
         '''
-        pass
-
-    def update_gamestate(self, color:Color):
-        '''
-        '''
-        pass
+        prob = 1 - 1 / (1 + np.exp(self.logoddsgrid))
+        for i in np.arange(25):
+            greencount = 0
+            browncount = 0
+            for j in np.arange(6):
+                if prob[i][j][0] > 0.9:
+                    greencount += 1
+                elif prob[i][j][1] > 0.9:
+                    browncount += 1
+            self.gamestate[i] = [greencount,browncount] # FIXME this is a dumb way to do it
+        print(self.gamestate)
 
     def determine_action(self):
         '''
@@ -155,6 +190,7 @@ class GameDriver():
                 queue up trajectories necessary for these move(s)
         else:
             wait for my turn in the init position
+        TODO
         '''
         pass
 

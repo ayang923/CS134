@@ -372,8 +372,8 @@ class DetectorNode(Node):
                 (u,v), radius = cv2.minEnclosingCircle(contour)
                 if self.rgb is not None: # draw circles on the imshow frame
                     self.rgb = cv2.circle(self.rgb, (int(u),int(v)), int(radius), rgb, 2)
-                    #cv2.imshow('test', self.rgb)
-                    #cv2.waitKey(1)
+                    cv2.imshow('test', self.rgb)
+                    cv2.waitKey(1)
                 xy = uvToXY(self.M, int(u), int(v))
                 if xy is not None:
                     [x, y] = xy
@@ -398,8 +398,8 @@ class DetectorNode(Node):
                 centeruv = np.int0(np.array([u,v]))
             if centeruv is not None:
                 cv2.circle(self.rgb,centeruv,radius=10,color=(255,50,50),thickness=2)
-                cv2.imshow('buckets', self.rgb)
-                cv2.waitKey(2)
+                #cv2.imshow('buckets', self.rgb)
+                #cv2.waitKey(2)
 
 
     def publish_checkers(self, checkers, color:Color):
