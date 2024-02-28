@@ -193,8 +193,8 @@ class DetectorNode(Node):
 
         self.rgb = None
 
-        self.M_timer = self.create_timer(5, self.get_perspective_transform_mat)
-        self.Minv_timer = self.create_timer(5, self.get_inv_perspective_transform_mat)
+        self.M_timer = self.create_timer(5, self.set_perspective_transform_mat)
+        self.Minv_timer = self.create_timer(5, self.set_inv_perspective_transform_mat)
         #self.board_timer = self.create_timer(1, self.publish_board_pose)
 
         self.x0 = 0.0
@@ -212,7 +212,10 @@ class DetectorNode(Node):
         self.last_frame = frame
 
         if self.M is None:
-            self.M = self.get_perspective_transform_mat()
+            self.set_perspective_transform_mat()
+
+        if self.Minv is None:
+            self.set_inv_perspective_transform_mat()
 
         blurred = cv2.GaussianBlur(frame, (5, 5), 0)
         hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
@@ -232,8 +235,9 @@ class DetectorNode(Node):
         
         self.rgb = cv2.cvtColor(blurred, cv2.COLOR_BGR2RGB)
         
-    def get_perspective_transform_mat(self):
+    def set_perspective_transform_mat(self):
         if self.last_frame is None:
+            print('no saved frame')
             return None
         
         # Detect the Aruco markers (using the 4X4 dictionary).
@@ -243,6 +247,7 @@ class DetectorNode(Node):
         # Abort if not all markers are detected.
         if (markerIds is None or len(markerIds) != 4 or
             set(markerIds.flatten()) != set([1,2,3,4])):
+            print('not all aruco seen')
             return None
 
         # Determine the center of the marker pixel coordinates.
@@ -257,10 +262,11 @@ class DetectorNode(Node):
                                 [(-DX, DY), (DX, DY), (-DX, -DY), (DX, -DY)]])
 
         # return the perspective transform.
-        return cv2.getPerspectiveTransform(uvMarkers, xyMarkers)
+        self.M = cv2.getPerspectiveTransform(uvMarkers, xyMarkers)
     
-    def get_inv_perspective_transform_mat(self):
+    def set_inv_perspective_transform_mat(self):
         if self.last_frame is None:
+            print('no last frame')
             return None
         
         # Detect the Aruco markers (using the 4X4 dictionary).
@@ -270,6 +276,7 @@ class DetectorNode(Node):
         # Abort if not all markers are detected.
         if (markerIds is None or len(markerIds) != 4 or
             set(markerIds.flatten()) != set([1,2,3,4])):
+            print('not all aruco seen')
             return None
 
         # Determine the center of the marker pixel coordinates.
@@ -284,7 +291,7 @@ class DetectorNode(Node):
                                 [(-DX, DY), (DX, DY), (-DX, -DY), (DX, -DY)]])
 
         # return the perspective transform.
-        return cv2.getPerspectiveTransform(xyMarkers, uvMarkers)
+        self.Minv = cv2.getPerspectiveTransform(xyMarkers, uvMarkers)
     
     def detect_board(self, img):
         blurred = cv2.GaussianBlur(img, (5, 5), 0)
@@ -307,7 +314,7 @@ class DetectorNode(Node):
                                              cv2.CHAIN_APPROX_SIMPLE)
 
         # finding board contour
-        if len(contours_board) > 0:
+        if len(contours_board) > 0 and self.M is not None and self.Minv is not None:
             board_msk = np.zeros(binary.shape)
             # Pick the largest contour.
             contour_board = max(contours_board, key=cv2.contourArea)
@@ -344,15 +351,15 @@ class DetectorNode(Node):
             # draw filtered fit rect from xy in uv space
             rect_uv = []
             for xy in smoothed:
-                print(xy)
                 x = xy[0]
                 y = xy[1]
                 uv = xyToUV(self.Minv,x,y)
                 if uv is not None:
                     [u, v] = uv
                     rect_uv.append([u,v])
-            rect_uv = np.array(rect_uv)
-            cv2.drawContours(self.rgb,rect_uv,0, (0,255,0),2)
+            if rect_uv:
+                rect_uv = np.int0(np.array(rect_uv, dtype=np.float32))
+                cv2.drawContours(self.rgb,[rect_uv],-1,(0,255,0),2)
 
         self.pub_board_mask.publish(self.bridge.cv2_to_imgmsg(binary))
 
@@ -492,6 +499,8 @@ class DetectorNode(Node):
 # helper functions
 
 def uvToXY(M,u,v):
+    if M is None:
+        return None
     # Map the object in question.
     uvObj = np.float32([u, v])
     xyObj = cv2.perspectiveTransform(uvObj.reshape(1,1,2), M).reshape(2)
@@ -499,6 +508,8 @@ def uvToXY(M,u,v):
     return xyObj
 
 def xyToUV(M,x,y):
+    if M is None:
+        return None
     # Map the object in question.
     xyObj = np.float32([x, y])
     uvObj = cv2.perspectiveTransform(xyObj.reshape(1,1,2), M).reshape(2)
