@@ -1,4 +1,0 @@
-[console_scripts]
-detectors = sixdof.detectors:main
-main = sixdof.main:main
-

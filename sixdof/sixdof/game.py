@@ -3,6 +3,8 @@ from std_msgs.msg import UInt8MultiArray
 
 from enum import Enum
 
+from rclpy.node         import Node
+
 import numpy as np
 
 from sixdof.TransformHelpers import *
@@ -15,7 +17,7 @@ class Color(Enum):
 
 # class passed into trajectory node to handle game logic
 class GameDriver():
-    def __init__(self, trajectory_node, task_handler):
+    def __init__(self, trajectory_node:Node, task_handler):
         self.trajectory_node = trajectory_node
         self.task_handler = task_handler
         
@@ -65,6 +67,7 @@ class GameDriver():
         updates self.boardpose
         '''
         self.game_board.filtered_board_update(msg)
+        self.pub_buckets()
 
     def recvgreen(self, msg):
         '''
@@ -155,6 +158,15 @@ class GameDriver():
         '''
         pass
 
+    def pub_buckets(self):
+        bucket_poses = PoseArray()
+        for i in np.arange(25):
+            for j in np.arange(6):
+                p = pxyz(self.game_board.centers[i][j][0], self.game_board.centers[i][j][1], 0)
+                R = Reye()
+                bucket_poses.poses.append(Pose_from_T(T_from_Rp(R,p)))
+        self.trajectory_node.test_bucket_pub.publish(bucket_poses)
+
 # physical representation of the two halves of the board
 class GameBoard():
     def __init__(self):
@@ -166,13 +178,13 @@ class GameBoard():
         self.tau = 3 # FIXME
         self.alpha = 1 - 1/self.tau
 
-        self.L = 1.0605 # board length
-        self.H = 0.5366 # board width
-        self.dL = 0.05609 # triangle to triangle dist
+        self.L = 1.06 # board length
+        self.H = 0.536 # board width
+        self.dL = 0.067 # triangle to triangle dist
         self.dH = 0.040 # checker to checker stack dist
 
-        self.dL0 = 0.24765 # gap from blue side to first triangle center
-        self.dL1 = 0.117475 - self.dL # gap between two sections of triangles (minus dL)
+        self.dL0 = 0.2485 # gap from blue side to first triangle center
+        self.dL1 = 0.117 - self.dL # gap between two sections of triangles (minus dL)
 
         self.centers = None
 
@@ -219,9 +231,18 @@ class GameBoard():
             y = self.board_y + 2.5*self.dH - j*self.dH
             centers[24][j] = [x,y]
         
+        # planar rotate by theta - np.pi/2
+        rotated_centers = np.zeros((25,6,2))
+        theta = self.board_t - np.pi/2
+        for i in np.arange(25):
+            for j in np.arange(6):
+                x = centers[i][j][0]*np.cos(theta) - centers[i][j][1]*np.sin(theta)
+                y = centers[i][j][0]*np.sin(theta) + centers[i][j][1]*np.cos(theta)
+                rotated_centers[i][j] = [x,y]
+        '''        
         # uncomment for plotting centers
-        '''
-        flattened_centers = centers.reshape(-1, 2)
+        
+        flattened_centers = rotated_centers.reshape(-1, 2)
 
         # Extract x and y coordinates
         x_coords = flattened_centers[:, 0]
@@ -235,10 +256,8 @@ class GameBoard():
         plt.title('Grid Centers')
         plt.grid(True)
         plt.show()'''
-
-        # TODO rotate from board frame to world frame by self.board_t
                                  
-        self.centers = centers
+        self.centers = rotated_centers
 
     def filtered_board_update(self, measurement:Pose):
         self.board_x = self.filtered_update(self.board_x, measurement.position.x)

@@ -1,1 +1,0 @@
-/home/robot/repo/src/detectors/launch/start_usbcam.launch.py

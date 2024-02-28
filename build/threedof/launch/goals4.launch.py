@@ -1,1 +1,0 @@
-/home/robot/repo/src/threedof/launch/goals4.launch.py

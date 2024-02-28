@@ -1,1 +1,0 @@
-/home/robot/repo/src/demo134/launch/goals2.launch.py

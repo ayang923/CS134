@@ -1,1 +1,0 @@
-/home/robot/repo/src/detectors/launch/view_usbcam_rviz.launch.py

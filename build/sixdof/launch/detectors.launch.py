@@ -1,1 +1,0 @@
-/home/robot/repo/src/sixdof/launch/detectors.launch.py

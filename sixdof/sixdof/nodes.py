@@ -60,6 +60,7 @@ class TrajectoryNode(Node):
 
         # game driver for trajectory node
         self.game_driver = GameDriver(self, self.task_handler)
+        self.test_bucket_pub = self.create_publisher(PoseArray, '/buckets', 3)
 
         # Create a timer to keep calculating/sending commands.
         rate       = RATE
@@ -163,6 +164,9 @@ class DetectorNode(Node):
         self.rcvtipimg = self.create_subscription(Image, '/tip_cam/image_raw',
                                                   self.process_tip_images, 3)
         
+        self.rcvbuckets = self.create_subscription(PoseArray, '/buckets',
+                                                   self.draw_buckets, 3)
+        
         # Publishers for detected features:
         # Poses of two halves of game board
         self.pub_board = self.create_publisher(Pose, '/boardpose', 3)
@@ -254,7 +258,7 @@ class DetectorNode(Node):
         # trying to find board, dilating a lot to fill in boundary
         #binary_board = cv2.erode(binary, None, iterations=1)
         binary_board = cv2.dilate(binary, None, iterations=12)
-        binary_board = cv2.erode(binary_board, None, iterations=12)
+        binary_board = cv2.erode(binary_board, None, iterations=16)
 
         contours_board, _ = cv2.findContours(binary_board, cv2.RETR_EXTERNAL,
                                              cv2.CHAIN_APPROX_SIMPLE)
@@ -350,7 +354,7 @@ class DetectorNode(Node):
         binary = cv2.erode(binary, None, iterations=2)
         binary = cv2.dilate(binary, None, iterations=1)
         binary = cv2.erode(binary, None, iterations=6)
-        binary = cv2.dilate(binary, None, iterations=3)
+        binary = cv2.dilate(binary, None, iterations=1)
         
         # Find contours in the mask
         (contours, hierarchy) = cv2.findContours(
@@ -368,8 +372,8 @@ class DetectorNode(Node):
                 (u,v), radius = cv2.minEnclosingCircle(contour)
                 if self.rgb is not None: # draw circles on the imshow frame
                     self.rgb = cv2.circle(self.rgb, (int(u),int(v)), int(radius), rgb, 2)
-                    cv2.imshow('test', self.rgb)
-                    cv2.waitKey(1)
+                    #cv2.imshow('test', self.rgb)
+                    #cv2.waitKey(1)
                 xy = uvToXY(self.M, int(u), int(v))
                 if xy is not None:
                     [x, y] = xy
@@ -382,6 +386,22 @@ class DetectorNode(Node):
         else:
             self.pub_brown_mask.publish(self.bridge.cv2_to_imgmsg(binary))
         
+    def draw_buckets(self, msg:PoseArray):
+        # Cannot seem to get this to draw correctly, no idea where the scaling
+        # is coming into play. Is self.Minv wrong?
+        for pose in msg.poses:
+            x = pose.position.x
+            y = pose.position.y
+            uv = xyToUV(self.Minv,x,y)
+            if uv is not None:
+                [u, v] = uv
+                centeruv = np.int0(np.array([u,v]))
+            if centeruv is not None:
+                cv2.circle(self.rgb,centeruv,radius=10,color=(255,50,50),thickness=2)
+                cv2.imshow('buckets', self.rgb)
+                cv2.waitKey(2)
+
+
     def publish_checkers(self, checkers, color:Color):
         checkerarray = PoseArray()
         if len(checkers > 0):
@@ -411,7 +431,6 @@ class DetectorNode(Node):
         
         x,y = self.best_board_rect[0]
         theta = np.radians(self.best_board_rect[2])
-        print('theta',theta)
 
         p1 = pxyz(x, y, 0.005)
         R1 = Rotz(theta)
@@ -442,7 +461,7 @@ class DetectorNode(Node):
         # Calculate the matching World coordinates of the 4 Aruco markers.
         DX = 1.184 # horizontal center-center of table aruco markers
         DY = 0.4985 # vertical center-center of table aruco markers
-        xyMarkers = np.float32([[self.x0+dx, self.y0+dy] for (dx, dy) in
+        xyMarkers = np.float32([[self.x0+dx/2, self.y0+dy/2] for (dx, dy) in
                                 [(-DX, DY), (DX, DY), (-DX, -DY), (DX, -DY)]])
 
         # return the perspective transform.
@@ -471,7 +490,7 @@ class DetectorNode(Node):
         # Calculate the matching World coordinates of the 4 Aruco markers.
         DX = 1.184 # horizontal center-center of table aruco markers
         DY = 0.4985 # vertical center-center of table aruco markers
-        xyMarkers = np.float32([[self.x0+dx, self.y0+dy] for (dx, dy) in
+        xyMarkers = np.float32([[self.x0+dx/2, self.y0+dy/2] for (dx, dy) in
                                 [(-DX, DY), (DX, DY), (-DX, -DY), (DX, -DY)]])
 
         # return the perspective transform.

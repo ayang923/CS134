@@ -1,1 +1,0 @@
-/home/robot/repo/src/detectors/launch/realsense_aligned.launch.py
