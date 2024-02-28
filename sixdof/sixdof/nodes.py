@@ -21,8 +21,8 @@ RATE = 100.0            # Hertz
 nan = float("nan")
 
 GREEN_CHECKER_LIMITS = np.array(([10, 70], [30, 90], [10, 70]))
-BROWN_CHECKER_LIMITS = np.array(([100, 120], [100, 130], [60, 90]))
-YELLOW_BOARD_LIMITS = np.array([[80, 120], [100, 220], [140, 180]])
+BROWN_CHECKER_LIMITS = np.array(([80, 120], [90, 140], [60, 120]))
+YELLOW_BOARD_LIMITS = np.array([[80, 120], [100, 220], [150, 180]])
 RED_BOARD_LIMITS = np.array([[100, 140], [160, 240], [100, 180]])
 
 class TrajectoryNode(Node):
@@ -56,16 +56,16 @@ class TrajectoryNode(Node):
         # creates task handler for robot
         self.task_handler = TaskHandler(self, np.array(self.position0).reshape(-1, 1))
 
-        self.task_handler.add_state(Tasks.INIT)
+        #self.task_handler.add_state(Tasks.INIT)
 
         # game driver for trajectory node
         self.game_driver = GameDriver(self, self.task_handler)
 
         # Create a timer to keep calculating/sending commands.
         rate       = RATE
-        self.timer = self.create_timer(1/rate, self.sendcmd)
-        self.get_logger().info("Sending commands with dt of %f seconds (%fHz)" %
-                               (self.timer.timer_period_ns * 1e-9, rate))
+        #self.timer = self.create_timer(1/rate, self.sendcmd)
+        #self.get_logger().info("Sending commands with dt of %f seconds (%fHz)" %
+        #                       (self.timer.timer_period_ns * 1e-9, rate))
         self.start_time = 1e-9 * self.get_clock().now().nanoseconds
 
 
@@ -165,7 +165,7 @@ class DetectorNode(Node):
         
         # Publishers for detected features:
         # Poses of two halves of game board
-        self.pub_board = self.create_publisher(PoseArray, '/boardpose', 3)
+        self.pub_board = self.create_publisher(Pose, '/boardpose', 3)
 
         # Poses of all detected green checkers
         self.pub_green = self.create_publisher(PoseArray, '/green', 3)
@@ -195,12 +195,15 @@ class DetectorNode(Node):
 
         self.M_timer = self.create_timer(5, self.set_perspective_transform_mat)
         self.Minv_timer = self.create_timer(5, self.set_inv_perspective_transform_mat)
-        #self.board_timer = self.create_timer(1, self.publish_board_pose)
+        self.board_timer = self.create_timer(1, self.detect_board)
 
         self.x0 = 0.0
         self.y0 = 0.387
 
         self.best_board_rect = None
+        
+        self.board_u_bounds = None
+        self.board_v_bounds = None
 
     def process_top_images(self, msg):     
         # Confirm the encoding and report.
@@ -224,8 +227,6 @@ class DetectorNode(Node):
         uc = W//2
         vc = H//2
 
-        self.detect_board(frame)
-
         self.detect_checkers(frame, Color.GREEN)
         #self.detect_checkers(frame, Color.BROWN)
 
@@ -234,7 +235,190 @@ class DetectorNode(Node):
         #    "Center pixel HSV = (%3d, %3d, %3d)" % tuple(hsv[vc, uc]))
         
         self.rgb = cv2.cvtColor(blurred, cv2.COLOR_BGR2RGB)
+    
+    def detect_board(self):
+        if self.last_frame is None:
+            return None
+
+        blurred = cv2.GaussianBlur(self.last_frame, (5, 5), 0)
+        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
+
+        # Threshold in Hmin/max, Smin/max, Vmin/max
+        binary_yellow = cv2.inRange(hsv, YELLOW_BOARD_LIMITS[:, 0],
+                                    YELLOW_BOARD_LIMITS[:, 1])
+        binary_red = cv2.inRange(hsv, RED_BOARD_LIMITS[:, 0],
+                                 RED_BOARD_LIMITS[:, 1])
+
+        binary = cv2.bitwise_or(binary_yellow, binary_red)
         
+        # trying to find board, dilating a lot to fill in boundary
+        #binary_board = cv2.erode(binary, None, iterations=1)
+        binary_board = cv2.dilate(binary, None, iterations=12)
+        binary_board = cv2.erode(binary_board, None, iterations=12)
+
+        contours_board, _ = cv2.findContours(binary_board, cv2.RETR_EXTERNAL,
+                                             cv2.CHAIN_APPROX_SIMPLE)
+
+        # finding board contour
+        if len(contours_board) > 0 and self.M is not None and self.Minv is not None:
+            board_msk = np.zeros(binary.shape)
+            # Pick the largest contour.
+            contour_board = max(contours_board, key=cv2.contourArea)
+            cv2.drawContours(board_msk,[contour_board], 0, 1, -1)
+            # filters out everythign but board
+            binary = cv2.bitwise_and(binary, binary, 
+                                     mask=board_msk.astype('uint8'))
+
+            # convert largest contour to xy
+            contour_xy = []
+            for point in contour_board:
+                u = point[0][0]
+                v = point[0][1]
+                xy = uvToXY(self.M,u,v)
+                if xy is not None:
+                    [x, y] = xy
+                    contour_xy.append([x, y])
+            contour_xy = np.array(contour_xy, dtype=np.float32)
+            
+            # get min area rect in xy
+            bound = cv2.minAreaRect(contour_xy)
+
+            # filter
+            if self.best_board_rect is None:
+                self.best_board_rect = bound
+            else:
+                alpha = 0.01
+                self.best_board_rect = (
+                alpha * np.array(bound[0]) + (1 - alpha) * np.array(self.best_board_rect[0]),
+                alpha * np.array(bound[1]) + (1 - alpha) * np.array(self.best_board_rect[1]),
+                alpha * bound[2] + (1 - alpha) * self.best_board_rect[2])
+            smoothed = cv2.boxPoints(self.best_board_rect)
+            
+            # draw red dot in center of rectangle
+            centerxy = np.mean(smoothed, axis=0)
+            centeruv = None
+            x = centerxy[0]
+            y = centerxy[1]
+            uv = xyToUV(self.Minv,x,y)
+            if uv is not None:
+                [u, v] = uv
+                centeruv = np.int0(np.array([u,v]))
+            if centeruv is not None:
+                cv2.circle(self.rgb,centeruv,radius=7,color=(0,0,255),thickness=-1)
+
+
+            # draw filtered fit rect from xy in uv space
+            rect_uv = []
+            for xy in smoothed:
+                x = xy[0]
+                y = xy[1]
+                uv = xyToUV(self.Minv,x,y)
+                if uv is not None:
+                    [u, v] = uv
+                    rect_uv.append([u,v])
+            if rect_uv:
+                rect_uv = np.int0(np.array(rect_uv, dtype=np.float32))
+                cv2.drawContours(self.rgb,[rect_uv],-1,(0,255,0),2)
+                self.board_u_bounds = [np.min(rect_uv[:,0]),np.max(rect_uv[:,0])]
+                self.board_v_bounds = [np.min(rect_uv[:,1]),np.max(rect_uv[:,1])]
+
+        self.pub_board_mask.publish(self.bridge.cv2_to_imgmsg(binary_board))
+        self.publish_board_pose()
+
+    def detect_checkers(self, img, color:Color):
+        blurred = cv2.GaussianBlur(img, (5, 5), 0)
+        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
+
+        if color == Color.GREEN:
+            limits = self.green_checker_limits
+            rgb = (0,255,0)
+        else:
+            limits = self.brown_checker_limits
+            rgb = (255,0,0)
+
+        binary = cv2.inRange(hsv, limits[:, 0], limits[:, 1])
+        if self.board_u_bounds and self.board_v_bounds:    
+            u, v = np.meshgrid(np.arange(binary.shape[1]), np.arange(binary.shape[0]))
+            umin, umax = self.board_u_bounds
+            vmin, vmax = self.board_v_bounds
+            board_msk = ((u >= umin) & (u <= umax) & (v >= vmin) & (v <= vmax)).astype(np.uint8)
+            binary = cv2.bitwise_and(binary, binary, mask=board_msk)
+
+        # Erode and Dilate. Definitely adjust the iterations!
+        # probably need to erode a lot to make it recognize neighboring circles
+        binary = cv2.dilate(binary, None, iterations=2)
+        binary = cv2.erode(binary, None, iterations=2)
+        binary = cv2.dilate(binary, None, iterations=1)
+        binary = cv2.erode(binary, None, iterations=6)
+        binary = cv2.dilate(binary, None, iterations=3)
+        
+        # Find contours in the mask
+        (contours, hierarchy) = cv2.findContours(
+            binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Only proceed if at least one contour was found.  You may
+        # also want to loop over the contours...
+        checkers = []
+        if len(contours) > 0:
+            contours = sorted(contours, key=cv2.contourArea, reverse=True)
+            i = 0
+            for contour in contours:
+                if i > 14: # only consider the 15 largest contours
+                    break
+                (u,v), radius = cv2.minEnclosingCircle(contour)
+                if self.rgb is not None: # draw circles on the imshow frame
+                    self.rgb = cv2.circle(self.rgb, (int(u),int(v)), int(radius), rgb, 2)
+                    cv2.imshow('test', self.rgb)
+                    cv2.waitKey(1)
+                xy = uvToXY(self.M, int(u), int(v))
+                if xy is not None:
+                    [x, y] = xy
+                    checkers.append([x, y])
+            checkers = np.array(checkers)
+            self.publish_checkers(checkers, color)
+        
+        if color == Color.GREEN:
+            self.pub_green_mask.publish(self.bridge.cv2_to_imgmsg(binary))
+        else:
+            self.pub_brown_mask.publish(self.bridge.cv2_to_imgmsg(binary))
+        
+    def publish_checkers(self, checkers, color:Color):
+        checkerarray = PoseArray()
+        if len(checkers > 0):
+            for checker in checkers:
+                p = pxyz(checker[0], checker[1], 0.005)
+                R = Reye()
+                checkerpose = Pose_from_T(T_from_Rp(R,p))
+                checkerarray.poses.append(checkerpose)
+            if color == Color.GREEN:
+                self.pub_green.publish(checkerarray)
+            else:
+                self.pub_brown.publish(checkerarray)
+
+    def process_tip_images(self, msg):
+        # TODO
+        pass
+
+    def publish_board_pose(self):
+        '''
+        
+        '''
+        if self.last_frame is None:
+            return None
+        
+        if self.best_board_rect is None:
+            return None
+        
+        x,y = self.best_board_rect[0]
+        theta = np.radians(self.best_board_rect[2])
+        print('theta',theta)
+
+        p1 = pxyz(x, y, 0.005)
+        R1 = Rotz(theta)
+        boardpose = Pose_from_T(T_from_Rp(R1,p1))
+
+        self.pub_board.publish(boardpose)
+
     def set_perspective_transform_mat(self):
         if self.last_frame is None:
             print('no saved frame')
@@ -292,209 +476,6 @@ class DetectorNode(Node):
 
         # return the perspective transform.
         self.Minv = cv2.getPerspectiveTransform(xyMarkers, uvMarkers)
-    
-    def detect_board(self, img):
-        blurred = cv2.GaussianBlur(img, (5, 5), 0)
-        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
-
-        # Threshold in Hmin/max, Smin/max, Vmin/max
-        binary_yellow = cv2.inRange(hsv, YELLOW_BOARD_LIMITS[:, 0],
-                                    YELLOW_BOARD_LIMITS[:, 1])
-        binary_red = cv2.inRange(hsv, RED_BOARD_LIMITS[:, 0],
-                                 RED_BOARD_LIMITS[:, 1])
-
-        binary = cv2.bitwise_or(binary_yellow, binary_red)
-        
-        # trying to find board, dilating a lot to fill in boundary
-        binary_board = cv2.erode(binary, None, iterations=2)
-        binary_board = cv2.dilate(binary_board, None, iterations=8)
-        binary_board = cv2.erode(binary_board, None, iterations=2)
-
-        contours_board, _ = cv2.findContours(binary_board, cv2.RETR_EXTERNAL,
-                                             cv2.CHAIN_APPROX_SIMPLE)
-
-        # finding board contour
-        if len(contours_board) > 0 and self.M is not None and self.Minv is not None:
-            board_msk = np.zeros(binary.shape)
-            # Pick the largest contour.
-            contour_board = max(contours_board, key=cv2.contourArea)
-            cv2.drawContours(board_msk,[contour_board], 0, 1, -1)
-            # filters out everythign but board
-            binary = cv2.bitwise_and(binary, binary, 
-                                     mask=board_msk.astype('uint8'))
-
-            # convert largest contour to xy
-            contour_xy = []
-            for point in contour_board:
-                u = point[0][0]
-                v = point[0][1]
-                xy = uvToXY(self.M,u,v)
-                if xy is not None:
-                    [x, y] = xy
-                    contour_xy.append([x, y])
-            contour_xy = np.array(contour_xy, dtype=np.float32)
-            
-            # get min area rect in xy
-            bound = cv2.minAreaRect(contour_xy)
-
-            # filter
-            if self.best_board_rect is None:
-                self.best_board_rect = bound
-            else:
-                alpha = 0.01
-                self.best_board_rect = (
-                alpha * np.array(bound[0]) + (1 - alpha) * np.array(self.best_board_rect[0]),
-                alpha * np.array(bound[1]) + (1 - alpha) * np.array(self.best_board_rect[1]),
-                alpha * bound[2] + (1 - alpha) * self.best_board_rect[2])
-            smoothed = cv2.boxPoints(self.best_board_rect)
-            
-            # draw filtered fit rect from xy in uv space
-            rect_uv = []
-            for xy in smoothed:
-                x = xy[0]
-                y = xy[1]
-                uv = xyToUV(self.Minv,x,y)
-                if uv is not None:
-                    [u, v] = uv
-                    rect_uv.append([u,v])
-            if rect_uv:
-                rect_uv = np.int0(np.array(rect_uv, dtype=np.float32))
-                cv2.drawContours(self.rgb,[rect_uv],-1,(0,255,0),2)
-
-        self.pub_board_mask.publish(self.bridge.cv2_to_imgmsg(binary))
-
-    def detect_checkers(self, img, color:Color):
-        blurred = cv2.GaussianBlur(img, (5, 5), 0)
-        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
-
-        if color == Color.GREEN:
-            limits = self.green_checker_limits
-        else:
-            limits = self.brown_checker_limits
-
-        binary = cv2.inRange(hsv, limits[:, 0], limits[:, 1])
-
-        # Erode and Dilate. Definitely adjust the iterations!
-        # probably need to erode a lot to make it recognize neighboring circles
-        binary = cv2.dilate(binary, None, iterations=2)
-        binary = cv2.erode(binary, None, iterations=2)
-        binary = cv2.dilate(binary, None, iterations=1)
-        binary = cv2.erode(binary, None, iterations=6)
-        binary = cv2.dilate(binary, None, iterations=1)
-        
-        # Find contours in the mask
-        (contours, hierarchy) = cv2.findContours(
-            binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        # Only proceed if at least one contour was found.  You may
-        # also want to loop over the contours...
-        checkers = []
-        if len(contours) > 0:
-            contours = sorted(contours, key=cv2.contourArea, reverse=True)
-            i = 0
-            for contour in contours:
-                if i > 14: # only consider the 15 largest contours
-                    break
-                (u,v), radius = cv2.minEnclosingCircle(contour)
-                if self.rgb is not None: # draw circles on the imshow frame
-                    self.rgb = cv2.circle(self.rgb, (int(u),int(v)), int(radius), (50, 255, 20), 2)
-                    cv2.imshow('test', self.rgb)
-                    cv2.waitKey(1)
-                xy = uvToXY(self.M, int(u), int(v))
-                if xy is not None:
-                    [x, y] = xy
-                    checkers.append([x, y])
-            checkers = np.array(checkers)
-            self.publish_checkers(checkers, color)
-        
-        if color == Color.GREEN:
-            self.pub_green_mask.publish(self.bridge.cv2_to_imgmsg(binary))
-        else:
-            self.pub_brown_mask.publish(self.bridge.cv2_to_imgmsg(binary))
-        
-    def publish_checkers(self, checkers, color:Color):
-        checkerarray = PoseArray()
-        if len(checkers > 0):
-            for checker in checkers:
-                p = pxyz(checker[0], checker[1], 0.005)
-                R = Reye()
-                checkerpose = Pose_from_T(T_from_Rp(R,p))
-                checkerarray.poses.append(checkerpose)
-            if color == Color.GREEN:
-                self.pub_green.publish(checkerarray)
-            else:
-                self.pub_brown.publish(checkerarray)
-
-    def process_tip_images(self, msg):
-        # TODO
-        pass
-
-    def publish_board_pose(self):
-        '''
-        
-        '''
-        if self.last_frame is None:
-            return None
-        
-        boardxyt = self.get_board_XYT()
-
-        if boardxyt is None:
-            return None
-
-
-        p1 = pxyz(boardxyt[0,0], boardxyt[0,1], 0.005)
-        R1 = Rotz(boardxyt[0,2])
-        board1pose = Pose_from_T(T_from_Rp(R1,p1))
-
-        p2 = pxyz(boardxyt[1,0], boardxyt[1,1], 0.005)
-        R2 = Rotz(boardxyt[1,2])
-        board2pose = Pose_from_T(T_from_Rp(R2,p2))
-
-        boardposes = PoseArray()
-        boardposes.poses.append(board1pose)
-        boardposes.poses.append(board2pose)
-
-        self.pub_board.publish(boardposes)
-
-    def get_board_XYT(self):
-        '''
-        try using aruco.estimateposesinglemarkers?
-        '''
-        if self.last_frame is None:
-            return None
-
-        markerCorners, markerIds, _ = cv2.aruco.detectMarkers(
-            self.last_frame, cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_50))
-
-        # Abort if not both markers detected.
-        if (markerIds is None or len(markerIds) != 2):
-            return None
-
-        # Determine the center of the marker pixel coordinates.
-        uvMarkers = np.zeros((2,2), dtype='float32')
-        for i in np.arange(len(markerIds)):
-            uvMarkers[markerIds[i]-3,:] = np.mean(markerCorners[i], axis=1)
-
-        print('uvmarkers',uvMarkers)
-
-        xytMarkers = np.zeros((2,3))
-        for i in np.arange(len(markerIds)):
-            xy = uvToXY(self.M, uvMarkers[i,0], uvMarkers[i,1])
-            if xy is not None:
-                print('xy',xy)
-                (x, y) = xy
-                xytMarkers[i,:2] = [x, y]
-            corners = markerCorners[i][0]
-            singlecorner = [corners[0][0], corners[0][1]]
-            cornerxy = uvToXY(self.M, singlecorner[0], singlecorner[1])
-            print('cornerxy',cornerxy)
-            if cornerxy is not None:
-                (cx, cy) = cornerxy
-                cx = cx - x
-                cy = cy - y
-                xytMarkers[i,2] = np.arctan2(cy, cx) - np.pi/4
-
-        return xytMarkers    
 
 # helper functions
 

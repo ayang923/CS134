@@ -5,6 +5,10 @@ from enum import Enum
 
 import numpy as np
 
+from sixdof.TransformHelpers import *
+
+import matplotlib.pyplot as plt
+
 class Color(Enum):
     GREEN = 1
     BROWN = 2
@@ -16,7 +20,7 @@ class GameDriver():
         self.task_handler = task_handler
         
         # /boardpose from Detector
-        self.sub_board = self.trajectory_node.create_subscription(PoseArray, '/boardpose',
+        self.sub_board = self.trajectory_node.create_subscription(Pose, '/boardpose',
                                                                   self.recvboard, 3)
 
         # Poses of all detected green checkers, /green from Detector
@@ -58,9 +62,9 @@ class GameDriver():
         /boardpose msg
 
         in: /boardpose PoseArray
-        updates self.board1pose and self.board2pose, no return
+        updates self.boardpose
         '''
-        self.game_board.filtered_board_update(msg.poses)
+        self.game_board.filtered_board_update(msg)
 
     def recvgreen(self, msg):
         '''
@@ -155,20 +159,26 @@ class GameDriver():
 class GameBoard():
     def __init__(self):
         # FIXME with "expected" values for the boards
-        self.board1x = -0.25
-        self.board1y = 0.387
-        self.board1t = 0
-        
-        self.board2x = 0.25
-        self.board2y = 0.387
-        self.board2t = 0
+        self.board_x = 0.0
+        self.board_y = 0.387
+        self.board_t = np.pi/2
 
         self.tau = 3 # FIXME
         self.alpha = 1 - 1/self.tau
 
-    def get_grid_centers(self):
+        self.L = 1.0605 # board length
+        self.H = 0.5366 # board width
+        self.dL = 0.05609 # triangle to triangle dist
+        self.dH = 0.040 # checker to checker stack dist
+
+        self.dL0 = 0.24765 # gap from blue side to first triangle center
+        self.dL1 = 0.117475 - self.dL # gap between two sections of triangles (minus dL)
+
+        self.centers = None
+
+    def set_grid_centers(self):
         '''
-        return 25 regions with 6 subdivisions each for bucketing given
+        return 25 centers with 6 subdivisions each for bucketing given
         current belief of the board pose
 
         in: self (need board positional info)
@@ -177,20 +187,67 @@ class GameBoard():
         could occupy.
 
         based only on geometry of board, basically need to measure this out
-        TODO
+        FIXME Test this!!
         '''
-        pass
+        centers = np.zeros((25,6,2))
+        for i in np.arange(6):
+            for j in np.arange(6):
+                x = self.board_x + self.L/2 - self.dL0 - i*self.dL
+                y = self.board_y + self.H/2 - self.dH/2 - j*self.dH
+                centers[i][j] = [x,y]
 
-    def filtered_board_update(self, measurements):
-        self.board1x = self.filtered_update(self.board1x, measurements[0].positions.x)
-        self.board1y = self.filtered_update(self.board1y, measurements[0].positions.y)
-        # filtered update call with quat to theta translation for board1
-        self.board2x = self.filtered_update(self.board2x, measurements[1].positions.x)
-        self.board2y = self.filtered_update(self.board2y, measurements[1].positions.y)
-        # filtered update call with quat to theta translation for board2
+        for i in np.arange(6,12):
+            for j in np.arange(6):
+                x = self.board_x + self.L/2 - self.dL0 - self.dL1 - i*self.dL
+                y = self.board_y + self.H/2 - self.dH/2 - j*self.dH
+                centers[i][j] = [x,y]
+
+        for i in np.arange(12,18):
+            for j in np.arange(6):
+                x = self.board_x + self.L/2 - self.dL0 - self.dL1 - (23-i)*self.dL
+                y = self.board_y - self.H/2 + self.dH/2 + j*self.dH
+                centers[i][j] = [x,y]
+
+        for i in np.arange(18,24):
+            for j in np.arange(6):
+                x = self.board_x + self.L/2 - self.dL0 - (23-i)*self.dL
+                y = self.board_y - self.H/2 + self.dH/2 + j*self.dH
+                centers[i][j] = [x,y]
+
+        for j in np.arange(6):
+            x = self.board_x + self.L/2 - self.dL0 - 5*self.dL - (self.dL1+self.dL)/2
+            y = self.board_y + 2.5*self.dH - j*self.dH
+            centers[24][j] = [x,y]
+        
+        # uncomment for plotting centers
+        '''
+        flattened_centers = centers.reshape(-1, 2)
+
+        # Extract x and y coordinates
+        x_coords = flattened_centers[:, 0]
+        y_coords = flattened_centers[:, 1]
+
+        # Plot the points
+        plt.figure(figsize=(8, 6))
+        plt.scatter(x_coords, y_coords, color='blue')
+        plt.xlabel('X')
+        plt.ylabel('Y')
+        plt.title('Grid Centers')
+        plt.grid(True)
+        plt.show()'''
+
+        # TODO rotate from board frame to world frame by self.board_t
+                                 
+        self.centers = centers
+
+    def filtered_board_update(self, measurement:Pose):
+        self.board_x = self.filtered_update(self.board_x, measurement.position.x)
+        self.board_y = self.filtered_update(self.board_y, measurement.position.y)
+        R = R_from_T(T_from_Pose(measurement))
+        t = np.arctan2(R[1,0],R[0,0]) # undo rotz
+        self.board_t = self.filtered_update(self.board_t, t)
+        self.set_grid_centers()
 
     def filtered_update(self, value, newvalue):
         value = (1 - self.alpha) * value + self.alpha * newvalue
         return value
-
-        
