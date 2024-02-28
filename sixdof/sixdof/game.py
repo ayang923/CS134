@@ -132,7 +132,7 @@ class GameDriver():
 
         use self.game_board.get_grid_centers() to determine how to increment/decrement the log
         odds grid given the detected checker positions.
-        FIXME
+        FIXME not working
         '''
         if self.game_board.centers is None:
             return None
@@ -156,7 +156,7 @@ class GameDriver():
 
     def update_gamestate(self):
         '''
-        TODO
+        FIXME not sure if this works
         '''
         prob = 1 - 1 / (1 + np.exp(self.logoddsgrid))
         for i in np.arange(25):
