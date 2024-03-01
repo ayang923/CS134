@@ -20,10 +20,14 @@ RATE = 100.0            # Hertz
 
 nan = float("nan")
 
-GREEN_CHECKER_LIMITS = np.array(([10, 70], [30, 90], [10, 70]))
-BROWN_CHECKER_LIMITS = np.array(([80, 120], [90, 140], [60, 120]))
+# 45 55 60
+# 110 130 90
+
+GREEN_CHECKER_LIMITS = np.array(([30, 70], [25, 80], [30, 90]))
+BROWN_CHECKER_LIMITS = np.array(([100, 150], [20, 75], [90, 160]))
 YELLOW_BOARD_LIMITS = np.array([[80, 120], [100, 220], [150, 180]])
 RED_BOARD_LIMITS = np.array([[100, 140], [160, 240], [100, 180]])
+BLUE_BOARD_LIMITS = np.array([[0, 40],[90, 140, ],[115, 170]])
 
 class TrajectoryNode(Node):
     # Initialization.
@@ -60,16 +64,15 @@ class TrajectoryNode(Node):
 
         # game driver for trajectory node
         self.game_driver = GameDriver(self, self.task_handler)
-        self.test_bucket_pub = self.create_publisher(PoseArray, '/buckets', 3)
+        self.test_bucket_pub = self.create_publisher(PoseArray, '/buckets', 10)
+        self.game_state_timer = self.create_timer(1, self.game_driver.update_gamestate)
 
         # Create a timer to keep calculating/sending commands.
         rate       = RATE
-        #self.timer = self.create_timer(1/rate, self.sendcmd)
-        #self.get_logger().info("Sending commands with dt of %f seconds (%fHz)" %
-        #                       (self.timer.timer_period_ns * 1e-9, rate))
+        self.timer = self.create_timer(1/rate, self.sendcmd)
+        self.get_logger().info("Sending commands with dt of %f seconds (%fHz)" %
+                               (self.timer.timer_period_ns * 1e-9, rate))
         self.start_time = 1e-9 * self.get_clock().now().nanoseconds
-
-
 
     # Called repeatedly by incoming messages - do nothing for now
     def recvfbk(self, fbkmsg):
@@ -104,9 +107,8 @@ class TrajectoryNode(Node):
     # Receive new command update from trajectory - called repeatedly by incoming messages.
     def update(self):
         self.t = self.get_time()
-         # Compute the desired joint positions and velocities for this time.
-        
-        GameDriver.determine_action()
+        # Compute the desired joint positions and velocities for this time.
+        self.game_driver.determine_action()
 
         desired = self.task_handler.evaluate_task(self.t, 1 / RATE)
         if desired is None:
@@ -119,6 +121,7 @@ class TrajectoryNode(Node):
             self.get_logger().warn("(q) and (qdot) must be python lists!")
             return
         if not (len(q) == len(self.jointnames)):
+            self.get_logger().info(str(len(q)))
             self.get_logger().warn("(q) must be same length as jointnames!")
             return
         if not (len(q) == len(qdot)):
@@ -165,10 +168,10 @@ class DetectorNode(Node):
                                                   self.process_tip_images, 3)
         
         self.rcvbuckets = self.create_subscription(PoseArray, '/buckets',
-                                                   self.draw_buckets, 3)
+                                                   self.save_buckets, 10)
         
         # Publishers for detected features:
-        # Poses of two halves of game board
+        # Pose of game board
         self.pub_board = self.create_publisher(Pose, '/boardpose', 3)
 
         # Poses of all detected green checkers
@@ -188,6 +191,9 @@ class DetectorNode(Node):
 
         self.pub_brown_mask = self.create_publisher(Image, 
                                                     '/usb_cam/brown_checker_binary', 3)
+        
+        self.pub_markup = self.create_publisher(Image,
+                                                '/usb_cam/markup',3)
 
         self.bridge = cv_bridge.CvBridge()
 
@@ -197,17 +203,23 @@ class DetectorNode(Node):
 
         self.rgb = None
 
-        self.M_timer = self.create_timer(5, self.set_perspective_transform_mat)
-        self.Minv_timer = self.create_timer(5, self.set_inv_perspective_transform_mat)
-        self.board_timer = self.create_timer(1, self.detect_board)
+        self.M_timer = self.create_timer(1, self.set_perspective_transform_mat)
+        self.Minv_timer = self.create_timer(1, self.set_inv_perspective_transform_mat)
+        self.board_timer = self.create_timer(0.5, self.detect_board)
+        self.draw_bucket_timer = self.create_timer(2, self.draw_buckets)
 
         self.x0 = 0.0
         self.y0 = 0.387
 
-        self.best_board_rect = None
+        self.best_board_rect = ([self.x0-0.01,0.37],[1.06,0.525],0)
+
+        self.board_buckets = None
         
         self.board_u_bounds = None
         self.board_v_bounds = None
+        self.board_bounds_mask = None
+        self.best_board_uv = None
+        self.best_board_center_uv = None
 
     def process_top_images(self, msg):     
         # Confirm the encoding and report.
@@ -224,21 +236,19 @@ class DetectorNode(Node):
         if self.Minv is None:
             self.set_inv_perspective_transform_mat()
 
-        blurred = cv2.GaussianBlur(frame, (5, 5), 0)
-        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
+        if self.board_bounds_mask is None:
+            self.detect_board()
 
-        (H, W, D) = blurred.shape
-        uc = W//2
-        vc = H//2
+        self.rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         self.detect_checkers(frame, Color.GREEN)
-        #self.detect_checkers(frame, Color.BROWN)
+        self.detect_checkers(frame, Color.BROWN)
 
-        # binary = cv2.erode( binary, None, iterations=iter)
-        #self.get_logger().info(
-        #    "Center pixel HSV = (%3d, %3d, %3d)" % tuple(hsv[vc, uc]))
-        
-        self.rgb = cv2.cvtColor(blurred, cv2.COLOR_BGR2RGB)
+        self.draw_best_board()
+
+        self.publish_board_pose()
+
+        self.pub_markup.publish(self.bridge.cv2_to_imgmsg(self.rgb, "bgr8"))
     
     def detect_board(self):
         if self.last_frame is None:
@@ -252,26 +262,27 @@ class DetectorNode(Node):
                                     YELLOW_BOARD_LIMITS[:, 1])
         binary_red = cv2.inRange(hsv, RED_BOARD_LIMITS[:, 0],
                                  RED_BOARD_LIMITS[:, 1])
+        binary_blue = cv2.inRange(hsv, BLUE_BOARD_LIMITS[:, 0],
+                                 BLUE_BOARD_LIMITS[:, 1])
 
         binary = cv2.bitwise_or(binary_yellow, binary_red)
         
         # trying to find board, dilating a lot to fill in boundary
-        #binary_board = cv2.erode(binary, None, iterations=1)
-        binary_board = cv2.dilate(binary, None, iterations=12)
-        binary_board = cv2.erode(binary_board, None, iterations=16)
+        binary_board = cv2.erode(binary, None, iterations=4)
+        binary_board = cv2.dilate(binary_board, None, iterations=12)
+        binary_board = cv2.erode(binary_board, None, iterations=8)
 
         contours_board, _ = cv2.findContours(binary_board, cv2.RETR_EXTERNAL,
                                              cv2.CHAIN_APPROX_SIMPLE)
 
         # finding board contour
         if len(contours_board) > 0 and self.M is not None and self.Minv is not None:
-            board_msk = np.zeros(binary.shape)
             # Pick the largest contour.
             contour_board = max(contours_board, key=cv2.contourArea)
-            cv2.drawContours(board_msk,[contour_board], 0, 1, -1)
+            #cv2.drawContours(board_msk,[contour_board], 0, 1, -1)
             # filters out everythign but board
-            binary = cv2.bitwise_and(binary, binary, 
-                                     mask=board_msk.astype('uint8'))
+            #binary = cv2.bitwise_and(binary, binary, 
+            #                         mask=board_msk.astype('uint8'))
 
             # convert largest contour to xy
             contour_xy = []
@@ -288,10 +299,8 @@ class DetectorNode(Node):
             bound = cv2.minAreaRect(contour_xy)
 
             # filter
-            if self.best_board_rect is None:
-                self.best_board_rect = bound
-            else:
-                alpha = 0.01
+            if abs(bound[2] - self.best_board_rect[2]) < 25:
+                alpha = 0.0001
                 self.best_board_rect = (
                 alpha * np.array(bound[0]) + (1 - alpha) * np.array(self.best_board_rect[0]),
                 alpha * np.array(bound[1]) + (1 - alpha) * np.array(self.best_board_rect[1]),
@@ -308,7 +317,8 @@ class DetectorNode(Node):
                 [u, v] = uv
                 centeruv = np.int0(np.array([u,v]))
             if centeruv is not None:
-                cv2.circle(self.rgb,centeruv,radius=7,color=(0,0,255),thickness=-1)
+                self.best_board_center_uv = centeruv
+                
 
 
             # draw filtered fit rect from xy in uv space
@@ -319,19 +329,50 @@ class DetectorNode(Node):
                 uv = xyToUV(self.Minv,x,y)
                 if uv is not None:
                     [u, v] = uv
-                    rect_uv.append([u,v])
-            if rect_uv:
+                    rect_uv.append([int(u),int(v)])
+            if rect_uv is not [] and len(rect_uv) == 4:
+                self.best_board_uv = np.array(rect_uv)
+                board_msk = np.zeros(binary.shape)
                 rect_uv = np.int0(np.array(rect_uv, dtype=np.float32))
-                cv2.drawContours(self.rgb,[rect_uv],-1,(0,255,0),2)
-                self.board_u_bounds = [np.min(rect_uv[:,0]),np.max(rect_uv[:,0])]
-                self.board_v_bounds = [np.min(rect_uv[:,1]),np.max(rect_uv[:,1])]
+                self.board_bounds_mask = np.uint8(cv2.drawContours(board_msk,[rect_uv],0,200,-1))
 
-        self.pub_board_mask.publish(self.bridge.cv2_to_imgmsg(binary_board))
-        self.publish_board_pose()
+            # if self.board_u_bounds and self.board_v_bounds:    
+            #     u, v = np.meshgrid(np.arange(binary.shape[1]), np.arange(binary.shape[0]))
+            #     umin, umax = self.board_u_bounds
+            #     vmin, vmax = self.board_v_bounds
+            #     #self.board_bounds_mask = ((u >= umin-10) & (u <= umax+10) & (v >= vmin-10) & (v <= vmax+10)).astype(np.uint8)
+        
+        #self.board_bounds_mask = binary_board        
+        if self.board_bounds_mask is not None:
+            self.pub_board_mask.publish(self.bridge.cv2_to_imgmsg(self.board_bounds_mask))
+
+    def draw_best_board(self):
+        if self.best_board_center_uv is not None and self.best_board_uv is not None:
+            cv2.circle(self.rgb,self.best_board_center_uv,radius=7,color=(0,0,255),thickness=-1)
+            cv2.drawContours(self.rgb,[self.best_board_uv],-1,(0,255,0),2)
+
 
     def detect_checkers(self, img, color:Color):
+        if self.last_frame is None:
+            return None
+        
+        if self.board_bounds_mask is None:
+            return None
+
         blurred = cv2.GaussianBlur(img, (5, 5), 0)
         hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
+
+        ###### Comment out if not testing: #############
+        (H, W, D) = blurred.shape
+        uc = W//2
+        vc = H//2
+
+        #self.get_logger().info(
+        #    "Center pixel HSV = (%3d, %3d, %3d)" % tuple(hsv[vc, uc]))
+        
+        cv2.line(self.rgb, (uc - 10, vc), (uc + 10, vc), (0, 0, 0), 2)
+        cv2.line(self.rgb, (uc, vc - 7), (uc, vc + 8), (0, 0, 0), 2)
+        ################################################
 
         if color == Color.GREEN:
             limits = self.green_checker_limits
@@ -340,22 +381,36 @@ class DetectorNode(Node):
             limits = self.brown_checker_limits
             rgb = (255,0,0)
 
-        binary = cv2.inRange(hsv, limits[:, 0], limits[:, 1])
-        if self.board_u_bounds and self.board_v_bounds:    
-            u, v = np.meshgrid(np.arange(binary.shape[1]), np.arange(binary.shape[0]))
-            umin, umax = self.board_u_bounds
-            vmin, vmax = self.board_v_bounds
-            board_msk = ((u >= umin) & (u <= umax) & (v >= vmin) & (v <= vmax)).astype(np.uint8)
-            binary = cv2.bitwise_and(binary, binary, mask=board_msk)
+        binary = cv2.inRange(hsv, limits[:, 0], limits[:, 1])    
+        binary = cv2.bitwise_and(binary, binary, mask=self.board_bounds_mask)           
 
         # Erode and Dilate. Definitely adjust the iterations!
         # probably need to erode a lot to make it recognize neighboring circles
         binary = cv2.dilate(binary, None, iterations=2)
         binary = cv2.erode(binary, None, iterations=2)
-        binary = cv2.dilate(binary, None, iterations=1)
-        binary = cv2.erode(binary, None, iterations=6)
-        binary = cv2.dilate(binary, None, iterations=1)
-        
+        binary = cv2.dilate(binary, None, iterations=3)
+        #binary = cv2.erode(binary, None, iterations=4)
+        #binary = cv2.dilate(binary, None, iterations=1)
+
+        circles = cv2.HoughCircles(binary, cv2.HOUGH_GRADIENT, dp=1, minDist=27,
+                                   param1=5, param2=7, minRadius=10, maxRadius=18)
+
+        # Ensure circles were found
+        checkers = []   
+        if circles is not None:
+            circles = np.round(circles[0, :]).astype("int")
+    
+            # Draw the circles on the original image
+            for (u, v, r) in circles:
+                cv2.circle(self.rgb, (u, v), r, (0, 255, 0), 2)  # Green circles with thickness 2
+                xy = uvToXY(self.M, int(u), int(v))
+                if xy is not None:
+                    [x, y] = xy
+                    checkers.append([x, y])
+            checkers = np.array(checkers)
+            self.publish_checkers(checkers, color)
+
+        '''
         # Find contours in the mask
         (contours, hierarchy) = cv2.findContours(
             binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -371,25 +426,36 @@ class DetectorNode(Node):
                     break
                 (u,v), radius = cv2.minEnclosingCircle(contour)
                 if self.rgb is not None: # draw circles on the imshow frame
-                    self.rgb = cv2.circle(self.rgb, (int(u),int(v)), int(radius), rgb, 2)
-                    cv2.imshow('test', self.rgb)
-                    cv2.waitKey(1)
+                    pass
+                    #self.rgb = cv2.circle(self.rgb, (int(u),int(v)), int(radius), rgb, 2)
+                    #cv2.imshow('test', self.rgb)
+                    #cv2.waitKey(1)
                 xy = uvToXY(self.M, int(u), int(v))
                 if xy is not None:
                     [x, y] = xy
                     checkers.append([x, y])
+                i += 1
             checkers = np.array(checkers)
             self.publish_checkers(checkers, color)
-        
+        '''
+
         if color == Color.GREEN:
             self.pub_green_mask.publish(self.bridge.cv2_to_imgmsg(binary))
         else:
             self.pub_brown_mask.publish(self.bridge.cv2_to_imgmsg(binary))
         
-    def draw_buckets(self, msg:PoseArray):
+    def save_buckets(self, msg:PoseArray):
         # Cannot seem to get this to draw correctly, no idea where the scaling
         # is coming into play. Is self.Minv wrong?
-        for pose in msg.poses:
+        #self.get_logger().info('buckets saved')
+        self.board_buckets = msg
+
+    def draw_buckets(self):
+        if self.board_buckets is None:
+            #self.get_logger().info('no board buckets')
+            return None
+        
+        for pose in self.board_buckets.poses:
             x = pose.position.x
             y = pose.position.y
             uv = xyToUV(self.Minv,x,y)
@@ -400,7 +466,6 @@ class DetectorNode(Node):
                 cv2.circle(self.rgb,centeruv,radius=10,color=(255,50,50),thickness=2)
                 #cv2.imshow('buckets', self.rgb)
                 #cv2.waitKey(2)
-
 
     def publish_checkers(self, checkers, color:Color):
         checkerarray = PoseArray()
@@ -440,7 +505,6 @@ class DetectorNode(Node):
 
     def set_perspective_transform_mat(self):
         if self.last_frame is None:
-            print('no saved frame')
             return None
         
         # Detect the Aruco markers (using the 4X4 dictionary).
@@ -450,7 +514,6 @@ class DetectorNode(Node):
         # Abort if not all markers are detected.
         if (markerIds is None or len(markerIds) != 4 or
             set(markerIds.flatten()) != set([1,2,3,4])):
-            print('not all aruco seen')
             return None
 
         # Determine the center of the marker pixel coordinates.
@@ -469,7 +532,6 @@ class DetectorNode(Node):
     
     def set_inv_perspective_transform_mat(self):
         if self.last_frame is None:
-            print('no last frame')
             return None
         
         # Detect the Aruco markers (using the 4X4 dictionary).
@@ -479,7 +541,6 @@ class DetectorNode(Node):
         # Abort if not all markers are detected.
         if (markerIds is None or len(markerIds) != 4 or
             set(markerIds.flatten()) != set([1,2,3,4])):
-            print('not all aruco seen')
             return None
 
         # Determine the center of the marker pixel coordinates.
@@ -538,8 +599,6 @@ def pixelToWorld(image, u, v, x0, y0, annotateImage=True):
         image, cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50))
     if annotateImage:
         cv2.aruco.drawDetectedMarkers(image, markerCorners, markerIds)
-
-    print('markerids',markerIds)
 
     # Abort if not all markers are detected.
     if (markerIds is None or len(markerIds) != 4 or

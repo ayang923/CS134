@@ -66,16 +66,16 @@ class InitTask(TaskObject):
         if self.done:
             return self.task_manager.q, np.zeros((6, 1))
         elif (self.in_shoulder_up):
-            if (t < 3.0):
-                return goto5(t, 3.0, self.SHOULDER_UP, self.ELBOW_UP)
+            if (t < 5.0):
+                return goto5(t, 5.0, self.SHOULDER_UP, self.ELBOW_UP)
             else:
                 self.done = True
                 return self.task_manager.q, np.zeros((6, 1))
         else:
-            if (t < 3.0):
-                return goto5(t, 3.0, self.q0, self.SHOULDER_UP)
-            elif (t < 6.0):
-                return goto5(t-3, 3.0, self.SHOULDER_UP, self.ELBOW_UP)
+            if (t < 5.0):
+                return goto5(t, 5.0, self.q0, self.SHOULDER_UP)
+            elif (t < 10.0):
+                return goto5(t-5, 5.0, self.SHOULDER_UP, self.ELBOW_UP)
             else:
                 self.done = True
                 return self.task_manager.q, np.zeros((6, 1))
@@ -91,8 +91,8 @@ class TaskSplineTask(TaskObject):
         # Pick the convergence bandwidth.
         self.lam = lam
 
-        self.x_final = x_final
-        self.T = 3.0
+        self.x_final = x_final.reshape(5,1)
+        self.T = T
     
     def evaluate(self, t, dt):
         t = t - self.start_time - dt
@@ -126,7 +126,7 @@ class TaskSplineTask(TaskObject):
             q, qdot = self.q, np.zeros((5, 1))
             self.done = True
 
-        return np.vstack((q,self.q0[5])), np.vstack((qdot,np.zeros(1)))
+        return np.vstack((q,self.q0[5])), np.vstack((qdot,np.zeros((1,1))))
 
     
 class GripperTask(TaskObject):
@@ -185,7 +185,6 @@ class TaskHandler():
         elif (self.curr_task_object is None or self.curr_task_object.done) and len(self.tasks) != 0:
             new_task_type, new_task_data = self.tasks.pop(0)
             self.set_state(new_task_type, t, **new_task_data)
-            self.node.get_logger().info(str(self.curr_task_object))
         
         # updates q and p
         self.q, qdot = self.curr_task_object.evaluate(t, dt)

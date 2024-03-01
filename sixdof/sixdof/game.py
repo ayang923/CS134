@@ -6,10 +6,13 @@ from enum import Enum
 from rclpy.node         import Node
 
 import numpy as np
+import random
 
 from sixdof.TransformHelpers import *
 
 import matplotlib.pyplot as plt
+
+from sixdof.states import *
 
 class Color(Enum):
     GREEN = 1
@@ -50,17 +53,21 @@ class GameDriver():
         # each element indicates [num_green, num_brown]
         # beginning to end of array progresses ccw from robot upper right.
         # last item is middle bar
-        self.gamestate = np.array([[2,0], [0,0], [0,0], [0,0], [0,0], [0,5],
-                                   [0,0], [0,3], [0,0], [0,0], [0,0], [5,0],
-                                   [0,5], [0,0], [0,0], [0,0], [3,0], [0,0],
-                                   [5,0], [0,0], [0,0], [0,0], [0,0], [0,2],
+        self.gamestate = np.array([[5,0], [0,0], [0,0], [0,0], [0,3], [0,0],
+                                   [0,5], [0,0], [0,0], [0,0], [0,0], [2,0],
+                                   [0,2], [0,0], [0,0], [0,0], [0,0], [5,0],
+                                   [0,0], [3,0], [0,0], [0,0], [0,0], [0,5],
                                    [0,0]])
+
         # self.recvgreen populates these arrays with detected green checker pos
         self.greenpos = None
         # self.recvbrown populates these arrays with detected brown checker pos
         self.brownpos = None
         # self.recvdice populates this with detected [die1_int, die2_int]
         self.dice = np.array([])
+
+        # Game engine
+        self.game = Game(self.gamestate)
 
     def recvboard(self, msg):
         '''
@@ -70,6 +77,7 @@ class GameDriver():
         in: /boardpose PoseArray
         updates self.boardpose
         '''
+        #self.trajectory_node.get_logger().info("Board Received")
         self.game_board.filtered_board_update(msg)
         self.pub_buckets()
 
@@ -92,7 +100,7 @@ class GameDriver():
             self.greenpos.append(xy)
         self.greenpos = np.array(self.greenpos)
         self.update_log_odds(Color.GREEN)
-        self.update_gamestate()
+        #self.update_gamestate()
 
     def recvbrown(self, msg):
         '''
@@ -104,7 +112,7 @@ class GameDriver():
             self.brownpos.append(xy)
         self.brownpos = np.array(self.brownpos)
         self.update_log_odds(Color.BROWN)
-        self.update_gamestate()
+        #self.update_gamestate()
 
     def recvdice(self, msg):
         '''
@@ -130,11 +138,12 @@ class GameDriver():
         updates self.logoddsgrid given the values in self.greenpos and self.brownpos
         from the most recent processed frame
 
-        use self.game_board.get_grid_centers() to determine how to increment/decrement the log
+        use self.game_board.set_grid_centers() to determine how to increment/decrement the log
         odds grid given the detected checker positions.
         FIXME not working
         '''
         if self.game_board.centers is None:
+            
             return None
 
         if color == Color.GREEN:
@@ -146,11 +155,11 @@ class GameDriver():
                 filled = False
                 center = self.game_board.centers[i][j]
                 for pos in posarray:
-                    if np.sqrt((center[0]-pos[0])**2 + (center[1]-pos[1]**2)) < 0.02:
-                        self.logoddsgrid[i][j][color.value - 1] += LOCC
+                    if np.sqrt((center[0]-pos[0])**2 + (center[1]-pos[1])**2) < 0.02 and filled == False:
+                        if self.logoddsgrid[i][j][color.value - 1] < 4: #probability of 0.98 limit
+                            self.logoddsgrid[i][j][color.value - 1] += LOCC
                         filled = True
-                        break
-                if filled == False:
+                if filled == False and (self.logoddsgrid[i][j][color.value - 1] > -2): # also limit on lower end for being free
                     self.logoddsgrid[i][j][color.value - 1] += LFREE
                 
 
@@ -163,12 +172,14 @@ class GameDriver():
             greencount = 0
             browncount = 0
             for j in np.arange(6):
-                if prob[i][j][0] > 0.9:
+                if prob[i][j][0] > 0.8:
                     greencount += 1
-                elif prob[i][j][1] > 0.9:
+                elif prob[i][j][1] > 0.8:
                     browncount += 1
             self.gamestate[i] = [greencount,browncount] # FIXME this is a dumb way to do it
-        print(self.gamestate)
+        #self.trajectory_node.get_logger().info("Updated Game State:") #For debuggin purposes
+        #self.trajectory_node.get_logger().info(str(self.gamestate))
+        
 
     def determine_action(self):
         '''
@@ -190,9 +201,120 @@ class GameDriver():
                 queue up trajectories necessary for these move(s)
         else:
             wait for my turn in the init position
-        TODO
         '''
-        pass
+        print('number of queued tasks',len(self.task_handler.tasks))
+        if len(self.task_handler.tasks) != 0:
+            return
+    
+        self.game.set_state(self.gamestate)
+        moves = self.handle_turn(self.game)
+
+        for (source, dest) in moves:
+            if source is None:
+                self.execute_off_bar(dest)
+            elif dest is None:
+                self.execute_bear_off(source)
+            elif np.sign(self.game.state[source]) != np.sign(self.game.state[dest]):
+                self.execute_hit(source, dest)
+            else:
+                self.execute_normal(source, dest)
+
+    def execute_off_bar(self, dest):
+        turn = 0 if self.game.turn == 1 else 1
+        bar = 24
+
+        centers = self.game_board.centers
+        dest_centers = centers[dest]
+        bar_centers = centers[bar]
+
+        if (self.turn == 1 and self.gamestate[dest][1] > 0 or
+            self.turn == -1 and self.gamestate[dest][0] > 0):
+
+            source_pos = dest_centers[0]
+            dest_pos = bar_centers[num_bar if turn else 5 - num_bar]
+            self.move_checker(source_pos, dest_pos)
+
+        num_dest = self.gamestate[dest][turn]
+        num_bar = self.gamestate[bar][turn]
+
+        source_pos = bar_centers[6 - num_bar if turn else num_bar - 1]
+        dest_pos = dest_centers[num_dest]
+
+        self.move_checker(source_pos, dest_pos)
+
+    def execute_bear_off(self, source):
+        turn = 0 if self.game.turn == 1 else 1
+        bar = 24
+
+        centers = self.game_board.centers
+        source_centers = centers[source]
+        bar_centers = centers[bar]
+
+        num_source = self.gamestate[source][turn]
+
+        source_pos = source_centers[num_source - 1]
+        dest_pos = bar_centers[0]
+        dest_pos[0] += 0.55
+
+        self.move_checker(source_pos, dest_pos)
+    
+    def execute_hit(self, source, dest):
+        turn = 0 if self.game.turn == 1 else 1
+        bar = 24
+
+        if self.game_board.centers is None:
+            return
+
+        centers = self.game_board.centers
+        source_centers = centers[source]
+        dest_centers = centers[dest]
+        bar_centers = centers[bar]
+
+        num_source = self.gamestate[source][turn]
+        num_bar = self.game.bar[0 if self.game.turn == 1 else 1]
+
+        source_pos = dest_centers[0]
+        dest_pos = bar_centers[5 - num_bar if turn else num_bar]
+
+        self.move_checker(source_pos, dest_pos)
+
+        source_pos = source_centers[num_source - 1]
+        dest_pos = dest_centers[0]
+
+        self.move_checker(source_pos, dest_pos)
+
+    def execute_normal(self, source, dest):
+        if self.game_board.centers is None:
+            return
+        
+        turn = 0 if self.game.turn == 1 else 1
+
+        centers = self.game_board.centers
+        source_centers = centers[source]
+        dest_centers = centers[dest]
+
+        num_source = self.gamestate[source][turn]
+        num_dest = self.gamestate[dest][turn]
+
+        source_pos = source_centers[num_source - 1]
+        dest_pos = dest_centers[num_dest]
+
+        self.move_checker(source_pos, dest_pos)
+
+    def move_checker(self, source_pos, dest_pos):
+        source_pos = np.append(source_pos,[0.05, -np.pi / 2, np.pi / 2 - np.arctan2(source_pos[1], source_pos[0])])
+        dest_pos = np.append(dest_pos, [0.05, -np.pi / 2, np.pi / 2 - np.arctan2(dest_pos[1], dest_pos[0])])
+
+        self.trajectory_node.get_logger().info(f"source pos {source_pos}")
+        self.trajectory_node.get_logger().info(f"dest pos {dest_pos}")
+        
+        self.task_handler.add_state(Tasks.INIT)
+        self.task_handler.add_state(Tasks.TASK_SPLINE, x_final = source_pos, T = 6)
+        self.task_handler.add_state(Tasks.GRIP)
+        self.task_handler.add_state(Tasks.INIT)
+        self.task_handler.add_state(Tasks.TASK_SPLINE, x_final = dest_pos, T = 6)
+        self.task_handler.add_state(Tasks.GRIP, grip = False)
+        self.task_handler.add_state(Tasks.INIT)
 
     def pub_buckets(self):
         bucket_poses = PoseArray()
@@ -201,7 +323,46 @@ class GameDriver():
                 p = pxyz(self.game_board.centers[i][j][0], self.game_board.centers[i][j][1], 0)
                 R = Reye()
                 bucket_poses.poses.append(Pose_from_T(T_from_Rp(R,p)))
+        # self.trajectory_node.get_logger().info("Sending bucket poses")
         self.trajectory_node.test_bucket_pub.publish(bucket_poses)
+    
+    def choose_move(self, game, moves):
+        #print("Legal moves: {}".format(moves))
+        if moves:
+            move = random.choice(moves)
+            game.move(move[0], move[1])
+            return move
+        if not game.num_checkers():
+            game.done = True
+        return None
+
+    def handle_turn(self, game):
+        moves = []
+        print("Turn played")
+        game.roll()
+
+        if game.dice[0] == game.dice[1]:
+            for _ in range(4):
+                moves = game.possible_moves(game.dice[0])
+                move = self.choose_move(game, moves)
+                if move is not None:
+                    moves.append(move)
+        else:
+            larger = 1
+            if game.dice[0] > game.dice[1]:
+                larger = 0
+            moves = game.possible_moves(larger)
+            move = self.choose_move(game, moves)
+            if move is not None:
+                moves.append(move)
+            moves = game.possible_moves(not larger)
+            move = self.choose_move(game, moves)
+            if move is not None:
+                moves.append(move)
+
+        game.turn *= -1
+        print("Possible moves after turn played:", moves)
+        return moves
 
 # physical representation of the two halves of the board
 class GameBoard():
@@ -216,10 +377,10 @@ class GameBoard():
 
         self.L = 1.06 # board length
         self.H = 0.536 # board width
-        self.dL = 0.067 # triangle to triangle dist
+        self.dL = 0.066 # triangle to triangle dist
         self.dH = 0.040 # checker to checker stack dist
 
-        self.dL0 = 0.2485 # gap from blue side to first triangle center
+        self.dL0 = 0.247 # gap from blue side to first triangle center
         self.dL1 = 0.117 - self.dL # gap between two sections of triangles (minus dL)
 
         self.centers = None
@@ -269,7 +430,7 @@ class GameBoard():
         
         # planar rotate by theta - np.pi/2
         rotated_centers = np.zeros((25,6,2))
-        theta = self.board_t - np.pi/2
+        theta = self.board_t
         for i in np.arange(25):
             for j in np.arange(6):
                 x = centers[i][j][0]*np.cos(theta) - centers[i][j][1]*np.sin(theta)
@@ -306,3 +467,164 @@ class GameBoard():
     def filtered_update(self, value, newvalue):
         value = (1 - self.alpha) * value + self.alpha * newvalue
         return value
+
+POINT_LIM = 6
+
+class Game:
+    def __init__(self, gamestate):
+        self.set_state(gamestate)
+        self.bar = [0, 0]
+        self.dice = [0, 0]
+        self.turn = 1
+        self.done = False
+        self.clicked = None
+
+    # Converts state in GameDriver format to state in engine format.
+    def set_state(self, gamestate):
+        self.state = []
+        self.bar = gamestate[24]
+        for point in gamestate[:24]:
+            if point[0]:
+                self.state.append(point[0])
+            else:
+                self.state.append(-point[1])
+
+    def roll(self):
+        self.dice = np.random.randint(1, 7, size = 2).tolist()
+        print("Rolled Dice:", self.dice)
+    
+    def move(self, point1, point2):
+        if point1 is None:
+            self.bar[0 if self.turn == 1 else 1] -= 1
+        if self.turn == 1:
+            if point2 is None:
+                self.state[point1] -= 1
+            elif self.state[point2] >= 0:
+                if point1 is not None:
+                    self.state[point1] -= 1
+                self.state[point2] += 1
+            elif self.state[point2] == -1:
+                if point1 is not None:
+                    self.state[point1] -= 1
+                self.state[point2] = 1
+                self.bar[1] += 1
+        elif self.turn == -1:
+            if point2 is None:
+                self.state[point1] += 1
+            elif self.state[point2] <= 0:
+                if point1 is not None:
+                    self.state[point1] += 1
+                self.state[point2] -= 1
+            elif self.state[point2] == 1:
+                if point1 is not None:
+                    self.state[point1] += 1
+                self.state[point2] = -1
+                self.bar[0] += 1
+
+    def is_valid(self, point1, point2, die, tried = False):
+        if point1 is None:
+            if (self.turn == 1 and -1 <= self.state[point2] < POINT_LIM and point2 + 1 == die or
+                self.turn == -1 and -POINT_LIM < self.state[point2] <= 1 and point2 == 24 - die):
+                return True
+            return False
+        if point2 is None:
+            if (self.turn == 1 and self.state[point1] > 0 and (point1 + die >= 24 if tried else point1 + die == 24) or
+                self.turn == -1 and self.state[point1] < 0 and (point1 - die <= -1 if tried else point1 - die == -1)):
+                return True
+            return False
+        if (point1 == point2 or
+            np.sign(self.state[point1]) != self.turn or
+            self.state[point1] > 0 and (point1 > point2 or self.turn == -1) or
+            self.state[point1] < 0 and (point1 < point2 or self.turn == 1) or
+            abs(point1 - point2) != die):
+            return False
+        if (self.state[point1] > 0 and -1 <= self.state[point2] < POINT_LIM or
+            self.state[point1] < 0 and -POINT_LIM < self.state[point2] <= 1):
+            return True
+        return False
+
+    def possible_moves(self, die):
+        moves = []
+        print("Moves at the beginning of possible moves")
+        # Move off bar
+        if self.turn == 1 and self.bar[0]:
+            print("In move off bar turn 1")
+            for point in range(6):
+                if self.is_valid(None, point, die):
+                    print("Inside valid")
+                    moves.append((None, point))
+            return moves
+        elif self.turn == -1 and self.bar[1]:
+            print("In move off bar turn -1 ")
+            for point in range(18, 24):
+                if self.is_valid(None, point, die):
+                    print("Inside valid")
+                    moves.append((None, point))
+            return moves
+        
+        # Move off board
+        if self.all_checkers_in_end():
+            print("Inside move off board")
+            if self.turn == 1:
+                for point in range(18, 24):
+                    if self.is_valid(point, None, die):
+                        print("Inside valid")
+                        moves.append((point, None))
+            elif self.turn == -1:
+                for point in range(6):
+                    if self.is_valid(point, None, die):
+                        print("Inside valid")
+                        moves.append((point, None))
+
+        # Normal moves
+        if not moves:
+            print("Inside normal moves")
+            for point1 in range(24):
+                for point2 in range(24):
+                    if self.is_valid(point1, point2, die):
+                        print("Inside valid")
+                        print("Source point: ",point1)
+                        print("Destination point: ", point2)
+                        moves.append((point1, point2))
+
+        # Move off board (again)
+        if not moves and self.all_checkers_in_end():
+            print("Inside move off board again")
+            if self.turn == 1:
+                for point in range(18, 24):
+                    if self.is_valid(point, None, die, True):
+                        print("Inside valid")
+                        moves.append((point, None))
+            elif self.turn == -1:
+                for point in range(6):
+                    if self.is_valid(point, None, die, True):
+                        print("Inside valid")
+                        moves.append((point, None))
+    
+        return moves
+    
+    def all_checkers_in_end(self):
+        if self.turn == 1:
+            for i in range(18):
+                if self.state[i] > 0:
+                    return False
+            return True
+        elif self.turn == -1:
+            for i in range(6, 24):
+                if self.state[i] < 0:
+                    return False
+            return True
+        
+    def num_checkers(self):
+        if self.turn == 1:
+            sum = self.bar[0]
+            for point in self.state:
+                if point > 0:
+                    sum += point
+            return sum
+        if self.turn == -1:
+            sum = self.bar[1]
+            for point in self.state:
+                if point < 0:
+                    sum -= point
+            return sum
