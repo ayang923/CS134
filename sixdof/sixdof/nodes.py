@@ -16,6 +16,8 @@ from sixdof.game import GameDriver, Color
 
 from enum import Enum
 
+import matplotlib.pyplot as plt
+
 RATE = 100.0            # Hertz
 
 nan = float("nan")
@@ -27,7 +29,7 @@ GREEN_CHECKER_LIMITS = np.array(([30, 70], [25, 80], [30, 90]))
 BROWN_CHECKER_LIMITS = np.array(([100, 150], [20, 75], [90, 160]))
 YELLOW_BOARD_LIMITS = np.array([[80, 120], [100, 220], [150, 180]])
 RED_BOARD_LIMITS = np.array([[100, 140], [160, 240], [100, 180]])
-BLUE_BOARD_LIMITS = np.array([[0, 40],[90, 140, ],[115, 170]])
+BLUE_BOARD_LIMITS = np.array([[0, 40],[90, 140],[100, 190]])
 
 class TrajectoryNode(Node):
     # Initialization.
@@ -69,10 +71,12 @@ class TrajectoryNode(Node):
 
         # Create a timer to keep calculating/sending commands.
         rate       = RATE
-        self.timer = self.create_timer(1/rate, self.sendcmd)
+        self.timer = self.create_timer(1 / rate, self.sendcmd)
         self.get_logger().info("Sending commands with dt of %f seconds (%fHz)" %
                                (self.timer.timer_period_ns * 1e-9, rate))
         self.start_time = 1e-9 * self.get_clock().now().nanoseconds
+
+        self.last_process = None
 
     # Called repeatedly by incoming messages - do nothing for now
     def recvfbk(self, fbkmsg):
@@ -108,7 +112,9 @@ class TrajectoryNode(Node):
     def update(self):
         self.t = self.get_time()
         # Compute the desired joint positions and velocities for this time.
-        self.game_driver.determine_action()
+        if self.last_process is None or self.last_process - self.t > 0.5:
+            self.last_process = self.get_time()
+            self.game_driver.determine_action()
 
         desired = self.task_handler.evaluate_task(self.t, 1 / RATE)
         if desired is None:
@@ -184,7 +190,7 @@ class DetectorNode(Node):
         
         #publishers for debugging images
         self.pub_board_mask = self.create_publisher(Image, 
-                                                    '/usb_cam/board_binary', 3)
+                                                    '/usb_cam/board_mask', 3)
 
         self.pub_green_mask = self.create_publisher(Image, 
                                                     '/usb_cam/green_checker_binary', 3)
@@ -199,28 +205,29 @@ class DetectorNode(Node):
 
         self.M = None
         self.Minv = None
-        self.last_frame = None
 
         self.rgb = None
-
-        self.M_timer = self.create_timer(1, self.set_perspective_transform_mat)
-        self.Minv_timer = self.create_timer(1, self.set_inv_perspective_transform_mat)
-        self.board_timer = self.create_timer(0.5, self.detect_board)
-        self.draw_bucket_timer = self.create_timer(2, self.draw_buckets)
 
         self.x0 = 0.0
         self.y0 = 0.387
 
-        self.best_board_rect = ([self.x0-0.01,0.37],[1.06,0.525],0)
-
-        self.board_buckets = None
-        
-        self.board_u_bounds = None
-        self.board_v_bounds = None
-        self.board_bounds_mask = None
+        self.best_board_xy = (None,[1.06,0.535],0)
         self.best_board_uv = None
         self.best_board_center_uv = None
 
+        self.board_mask_uv = None
+
+        self.board_buckets = None
+
+        self.start_time = 1e-9 * self.get_clock().now().nanoseconds
+        self.last_update = None
+
+        self.green_beliefs = None
+        self.brown_beliefs = None
+        
+    def get_time(self):
+        return 1e-9 * self.get_clock().now().nanoseconds - self.start_time
+    
     def process_top_images(self, msg):     
         # Confirm the encoding and report.
         assert(msg.encoding == "rgb8")
@@ -228,33 +235,30 @@ class DetectorNode(Node):
         # Convert into OpenCV image, using RGB 8-bit (pass-through).
         frame = self.bridge.imgmsg_to_cv2(msg, "passthrough")
 
-        self.last_frame = frame
-
-        if self.M is None:
-            self.set_perspective_transform_mat()
-
-        if self.Minv is None:
-            self.set_inv_perspective_transform_mat()
-
-        if self.board_bounds_mask is None:
-            self.detect_board()
+        if self.last_update is None or self.get_time() - self.last_update > 1:
+            self.set_M(frame)
+            self.set_Minv(frame)
+            self.detect_board(frame)    
+            self.publish_board_pose()
+            self.last_update = self.get_time()
 
         self.rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         self.detect_checkers(frame, Color.GREEN)
         self.detect_checkers(frame, Color.BROWN)
 
-        self.draw_best_board()
+        self.draw_best_board() # draws current best board in uv on self.rgb
+        self.draw_checkers() # draws filtered checker locations
+        self.draw_buckets() # draws current bucket knowledge on self.rgb
 
-        self.publish_board_pose()
+        self.publish_rgb()
 
-        self.pub_markup.publish(self.bridge.cv2_to_imgmsg(self.rgb, "bgr8"))
-    
-    def detect_board(self):
-        if self.last_frame is None:
-            return None
+    def process_tip_images(self, msg):
+        # TODO
+        pass
 
-        blurred = cv2.GaussianBlur(self.last_frame, (5, 5), 0)
+    def detect_board(self,frame):
+        blurred = cv2.GaussianBlur(frame, (5, 5), 0)
         hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
 
         # Threshold in Hmin/max, Smin/max, Vmin/max
@@ -265,24 +269,24 @@ class DetectorNode(Node):
         binary_blue = cv2.inRange(hsv, BLUE_BOARD_LIMITS[:, 0],
                                  BLUE_BOARD_LIMITS[:, 1])
 
-        binary = cv2.bitwise_or(binary_yellow, binary_red)
+        binary_board = cv2.bitwise_or(binary_yellow, binary_red)
+        #binary_board = cv2.bitwise_or(binary_board, binary_blue)
         
         # trying to find board, dilating a lot to fill in boundary
-        binary_board = cv2.erode(binary, None, iterations=4)
+        binary_board = cv2.erode(binary_board, None, iterations=2)
         binary_board = cv2.dilate(binary_board, None, iterations=12)
-        binary_board = cv2.erode(binary_board, None, iterations=8)
+        binary_board = cv2.erode(binary_board, None, iterations=7)
+
+        #cv2.imshow('board', binary_board)
+        #cv2.waitKey(1)
 
         contours_board, _ = cv2.findContours(binary_board, cv2.RETR_EXTERNAL,
                                              cv2.CHAIN_APPROX_SIMPLE)
 
         # finding board contour
-        if len(contours_board) > 0 and self.M is not None and self.Minv is not None:
+        if len(contours_board) > 0:
             # Pick the largest contour.
             contour_board = max(contours_board, key=cv2.contourArea)
-            #cv2.drawContours(board_msk,[contour_board], 0, 1, -1)
-            # filters out everythign but board
-            #binary = cv2.bitwise_and(binary, binary, 
-            #                         mask=board_msk.astype('uint8'))
 
             # convert largest contour to xy
             contour_xy = []
@@ -299,31 +303,18 @@ class DetectorNode(Node):
             bound = cv2.minAreaRect(contour_xy)
 
             # filter
-            if abs(bound[2] - self.best_board_rect[2]) < 25:
-                alpha = 0.0001
-                self.best_board_rect = (
-                alpha * np.array(bound[0]) + (1 - alpha) * np.array(self.best_board_rect[0]),
-                alpha * np.array(bound[1]) + (1 - alpha) * np.array(self.best_board_rect[1]),
-                alpha * bound[2] + (1 - alpha) * self.best_board_rect[2])
-            smoothed = cv2.boxPoints(self.best_board_rect)
-            
-            # draw red dot in center of rectangle
-            centerxy = np.mean(smoothed, axis=0)
-            centeruv = None
-            x = centerxy[0]
-            y = centerxy[1]
-            uv = xyToUV(self.Minv,x,y)
-            if uv is not None:
-                [u, v] = uv
-                centeruv = np.int0(np.array([u,v]))
-            if centeruv is not None:
-                self.best_board_center_uv = centeruv
-                
-
-
-            # draw filtered fit rect from xy in uv space
+            if (abs(bound[2] - self.best_board_xy[2]) < 25 and # not a bad angle
+                abs(self.best_board_xy[1][0]*self.best_board_xy[1][1] - 
+                    bound[1][0]*bound[1][1]) < 0.05): # not covered -> bad area
+                alpha = 0.1
+                self.best_board_xy = (
+                bound[0] if self.best_board_xy[0] is None else alpha * np.array(bound[0]) + (1 - alpha) * np.array(self.best_board_xy[0]),
+                alpha * np.array(bound[1]) + (1 - alpha) * np.array(self.best_board_xy[1]),
+                alpha * bound[2] + (1 - alpha) * self.best_board_xy[2])
+          
+            # get filtered fit rect from xy in uv space
             rect_uv = []
-            for xy in smoothed:
+            for xy in cv2.boxPoints(self.best_board_xy):
                 x = xy[0]
                 y = xy[1]
                 uv = xyToUV(self.Minv,x,y)
@@ -332,68 +323,40 @@ class DetectorNode(Node):
                     rect_uv.append([int(u),int(v)])
             if rect_uv is not [] and len(rect_uv) == 4:
                 self.best_board_uv = np.array(rect_uv)
-                board_msk = np.zeros(binary.shape)
+                board_msk = np.zeros(binary_board.shape)
                 rect_uv = np.int0(np.array(rect_uv, dtype=np.float32))
-                self.board_bounds_mask = np.uint8(cv2.drawContours(board_msk,[rect_uv],0,200,-1))
+                self.board_mask_uv = np.uint8(cv2.drawContours(board_msk,[rect_uv],0,200,-1))
 
-            # if self.board_u_bounds and self.board_v_bounds:    
-            #     u, v = np.meshgrid(np.arange(binary.shape[1]), np.arange(binary.shape[0]))
-            #     umin, umax = self.board_u_bounds
-            #     vmin, vmax = self.board_v_bounds
-            #     #self.board_bounds_mask = ((u >= umin-10) & (u <= umax+10) & (v >= vmin-10) & (v <= vmax+10)).astype(np.uint8)
-        
-        #self.board_bounds_mask = binary_board        
-        if self.board_bounds_mask is not None:
-            self.pub_board_mask.publish(self.bridge.cv2_to_imgmsg(self.board_bounds_mask))
+        if self.board_mask_uv is not None:
+            self.pub_board_mask.publish(self.bridge.cv2_to_imgmsg(self.board_mask_uv))
 
-    def draw_best_board(self):
-        if self.best_board_center_uv is not None and self.best_board_uv is not None:
-            cv2.circle(self.rgb,self.best_board_center_uv,radius=7,color=(0,0,255),thickness=-1)
-            cv2.drawContours(self.rgb,[self.best_board_uv],-1,(0,255,0),2)
-
-
-    def detect_checkers(self, img, color:Color):
-        if self.last_frame is None:
-            return None
-        
-        if self.board_bounds_mask is None:
+    def detect_checkers(self, frame, color:Color):
+        if self.board_mask_uv is None:
             return None
 
-        blurred = cv2.GaussianBlur(img, (5, 5), 0)
+        blurred = cv2.GaussianBlur(frame, (5, 5), 0)
         hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
-
-        ###### Comment out if not testing: #############
-        (H, W, D) = blurred.shape
-        uc = W//2
-        vc = H//2
-
-        #self.get_logger().info(
-        #    "Center pixel HSV = (%3d, %3d, %3d)" % tuple(hsv[vc, uc]))
-        
-        cv2.line(self.rgb, (uc - 10, vc), (uc + 10, vc), (0, 0, 0), 2)
-        cv2.line(self.rgb, (uc, vc - 7), (uc, vc + 8), (0, 0, 0), 2)
-        ################################################
 
         if color == Color.GREEN:
             limits = self.green_checker_limits
-            rgb = (0,255,0)
+            draw_color = (0,255,0)
         else:
             limits = self.brown_checker_limits
-            rgb = (255,0,0)
+            draw_color = (255,0,0)
 
         binary = cv2.inRange(hsv, limits[:, 0], limits[:, 1])    
-        binary = cv2.bitwise_and(binary, binary, mask=self.board_bounds_mask)           
+        binary = cv2.bitwise_and(binary, binary, mask=self.board_mask_uv)           
 
         # Erode and Dilate. Definitely adjust the iterations!
         # probably need to erode a lot to make it recognize neighboring circles
         binary = cv2.dilate(binary, None, iterations=2)
-        binary = cv2.erode(binary, None, iterations=2)
+        binary = cv2.erode(binary, None, iterations=3)
         binary = cv2.dilate(binary, None, iterations=3)
         #binary = cv2.erode(binary, None, iterations=4)
         #binary = cv2.dilate(binary, None, iterations=1)
 
         circles = cv2.HoughCircles(binary, cv2.HOUGH_GRADIENT, dp=1, minDist=27,
-                                   param1=5, param2=7, minRadius=10, maxRadius=18)
+                                   param1=5, param2=7, minRadius=12, maxRadius=17)
 
         # Ensure circles were found
         checkers = []   
@@ -402,53 +365,73 @@ class DetectorNode(Node):
     
             # Draw the circles on the original image
             for (u, v, r) in circles:
-                cv2.circle(self.rgb, (u, v), r, (0, 255, 0), 2)  # Green circles with thickness 2
                 xy = uvToXY(self.M, int(u), int(v))
                 if xy is not None:
                     [x, y] = xy
                     checkers.append([x, y])
             checkers = np.array(checkers)
-            self.publish_checkers(checkers, color)
 
-        '''
-        # Find contours in the mask
-        (contours, hierarchy) = cv2.findContours(
-            binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            # Correspondence
+            if color == Color.GREEN:
+                if self.green_beliefs is None:
+                    self.green_beliefs = [[pos,0] for pos in checkers]
+                else:
+                    self.green_beliefs = correspondence(checkers, self.green_beliefs)
+                    positions = np.array([group[0] for group in self.green_beliefs])
+                    self.publish_checkers(positions, color)
+            else:
+                if self.brown_beliefs is None:
+                    self.brown_beliefs = [[pos,0] for pos in checkers]
+                else:
+                    self.brown_beliefs = correspondence(checkers, self.brown_beliefs)
+                    positions = np.array([group[0] for group in self.brown_beliefs])
+                    self.publish_checkers(positions, color)
 
-        # Only proceed if at least one contour was found.  You may
-        # also want to loop over the contours...
-        checkers = []
-        if len(contours) > 0:
-            contours = sorted(contours, key=cv2.contourArea, reverse=True)
-            i = 0
-            for contour in contours:
-                if i > 14: # only consider the 15 largest contours
-                    break
-                (u,v), radius = cv2.minEnclosingCircle(contour)
-                if self.rgb is not None: # draw circles on the imshow frame
-                    pass
-                    #self.rgb = cv2.circle(self.rgb, (int(u),int(v)), int(radius), rgb, 2)
-                    #cv2.imshow('test', self.rgb)
-                    #cv2.waitKey(1)
-                xy = uvToXY(self.M, int(u), int(v))
-                if xy is not None:
-                    [x, y] = xy
-                    checkers.append([x, y])
-                i += 1
-            checkers = np.array(checkers)
-            self.publish_checkers(checkers, color)
-        '''
-
+        # Checker Mask Troubleshooting
+        ###################################################################
         if color == Color.GREEN:
             self.pub_green_mask.publish(self.bridge.cv2_to_imgmsg(binary))
         else:
             self.pub_brown_mask.publish(self.bridge.cv2_to_imgmsg(binary))
+        ###################################################################
         
     def save_buckets(self, msg:PoseArray):
         # Cannot seem to get this to draw correctly, no idea where the scaling
         # is coming into play. Is self.Minv wrong?
         #self.get_logger().info('buckets saved')
         self.board_buckets = msg
+
+    def draw_best_board(self):
+        if self.best_board_xy is not None and self.best_board_uv is not None:
+            # draw center
+            centerxy = np.mean(cv2.boxPoints(self.best_board_xy), axis=0)
+            x = centerxy[0]
+            y = centerxy[1]
+            uv = xyToUV(self.Minv,x,y)
+            if uv is not None:
+                [u, v] = uv
+                centeruv = np.int0(np.array([u,v]))
+            cv2.circle(self.rgb,centeruv,radius=7,color=(0,0,255),thickness=-1)
+            
+            # draw outside of board
+            cv2.drawContours(self.rgb,[self.best_board_uv],-1,(0,255,255),4)
+
+    def draw_checkers(self):
+        if self.brown_beliefs is not None and self.green_beliefs is not None:
+            for pair in self.brown_beliefs:
+                if pair[1] > 1.5: # check if we're confident its there
+                    [x,y] = pair[0]
+                    uv = xyToUV(self.Minv,x,y)
+                    if uv is not None:
+                        [u,v] = uv
+                        cv2.circle(self.rgb, np.int0(np.array([u,v])), radius=15, color=(0,0,255), thickness=3)
+            for pair in self.green_beliefs:
+                if pair[1] > 1.5: # check if we're confident its there
+                    [x,y] = pair[0]
+                    uv = xyToUV(self.Minv,x,y)
+                    if uv is not None:
+                        [u,v] = uv
+                        cv2.circle(self.rgb, np.int0(np.array([u,v])), radius=15, color=(0,255,0), thickness=3)
 
     def draw_buckets(self):
         if self.board_buckets is None:
@@ -462,7 +445,6 @@ class DetectorNode(Node):
             if uv is not None:
                 [u, v] = uv
                 centeruv = np.int0(np.array([u,v]))
-            if centeruv is not None:
                 cv2.circle(self.rgb,centeruv,radius=10,color=(255,50,50),thickness=2)
                 #cv2.imshow('buckets', self.rgb)
                 #cv2.waitKey(2)
@@ -480,22 +462,28 @@ class DetectorNode(Node):
             else:
                 self.pub_brown.publish(checkerarray)
 
-    def process_tip_images(self, msg):
-        # TODO
-        pass
+    def publish_rgb(self):
+            (H, W, D) = self.rgb.shape
+            uc = W//2
+            vc = H//2
+
+            #self.get_logger().info(
+            #    "Center pixel HSV = (%3d, %3d, %3d)" % tuple(hsv[vc, uc]))
+            
+            cv2.line(self.rgb, (uc - 10, vc), (uc + 10, vc), (0, 0, 0), 2)
+            cv2.line(self.rgb, (uc, vc - 7), (uc, vc + 8), (0, 0, 0), 2)
+            
+            self.pub_markup.publish(self.bridge.cv2_to_imgmsg(self.rgb, "bgr8"))
 
     def publish_board_pose(self):
         '''
         
-        '''
-        if self.last_frame is None:
+        '''        
+        if self.best_board_xy[0] is None:
             return None
         
-        if self.best_board_rect is None:
-            return None
-        
-        x,y = self.best_board_rect[0]
-        theta = np.radians(self.best_board_rect[2])
+        x,y = self.best_board_xy[0]
+        theta = np.radians(self.best_board_xy[2])
 
         p1 = pxyz(x, y, 0.005)
         R1 = Rotz(theta)
@@ -503,13 +491,13 @@ class DetectorNode(Node):
 
         self.pub_board.publish(boardpose)
 
-    def set_perspective_transform_mat(self):
-        if self.last_frame is None:
+    def set_M(self, frame):
+        if frame is None:
             return None
         
         # Detect the Aruco markers (using the 4X4 dictionary).
         markerCorners, markerIds, _ = cv2.aruco.detectMarkers(
-            self.last_frame, cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50))
+            frame, cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50))
 
         # Abort if not all markers are detected.
         if (markerIds is None or len(markerIds) != 4 or
@@ -530,13 +518,13 @@ class DetectorNode(Node):
         # return the perspective transform.
         self.M = cv2.getPerspectiveTransform(uvMarkers, xyMarkers)
     
-    def set_inv_perspective_transform_mat(self):
-        if self.last_frame is None:
+    def set_Minv(self,frame):
+        if frame is None:
             return None
         
         # Detect the Aruco markers (using the 4X4 dictionary).
         markerCorners, markerIds, _ = cv2.aruco.detectMarkers(
-            self.last_frame, cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50))
+            frame, cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50))
 
         # Abort if not all markers are detected.
         if (markerIds is None or len(markerIds) != 4 or
@@ -558,6 +546,49 @@ class DetectorNode(Node):
         self.Minv = cv2.getPerspectiveTransform(xyMarkers, uvMarkers)
 
 # helper functions
+        
+EXIST = 0.1
+CLEAR = -0.1
+
+def correspondence(new, old):
+    '''
+    new are the freshly detected positions
+    old is a list of [[position, log-odds]]
+    '''
+    alpha = 0.1
+    updated = old.copy()
+    persisting = np.zeros(len(updated)) # flag whether object in old was detected again
+    corresp_ids = np.zeros(len(updated))
+    i = 0
+    oldpositions = [group[0] for group in old]
+    for pos in new: # for each detected position
+        found = False
+        j = 0
+        for oldpos in oldpositions: # check an existing object's position
+            if np.sqrt((pos[0]-oldpos[0])**2 + (pos[1]-oldpos[1])**2) < 0.02 and not found: # if less than 2cm from it
+                corresp_ids[j] = i
+                persisting[j] = 1 # mark that old object was detected again
+                found = True
+            j += 1
+        if not found: # if the detected position is not close to any existing objects
+            updated.append([pos,0]) # add to updated with 50/50 chance of existence
+        i += 1
+    for i in range(len(persisting)):
+        if persisting[i] == 0: # if not detected in the most recent frame
+            updated[i][1] += CLEAR # decrease log odds
+        else: # was detected in most recent frame
+            if updated[i][1] < 4:
+                updated[i][1] += EXIST # increase log odds
+            updated[i][0] = [alpha * new[int(corresp_ids[i])][0] + (1-alpha) * updated[i][0][0],
+                             alpha * new[int(corresp_ids[i])][1] + (1-alpha) * updated[i][0][1]] # filter position
+    for i in range(len(persisting)):
+        print(old[i][1])
+        if old[i][1] < -0.5: # get rid of it if we have very low chance of object still existing
+            updated.pop(i)
+
+    return updated
+            
+
 
 def uvToXY(M,u,v):
     if M is None:

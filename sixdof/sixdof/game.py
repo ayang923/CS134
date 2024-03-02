@@ -202,14 +202,20 @@ class GameDriver():
         else:
             wait for my turn in the init position
         '''
-        print('number of queued tasks',len(self.task_handler.tasks))
         if len(self.task_handler.tasks) != 0:
             return
-    
+
         self.game.set_state(self.gamestate)
         moves = self.handle_turn(self.game)
 
+        print("Camera game state: {}".format(self.gamestate))
+        print("Engine game state: {}".format(self.game.state))
+        print("Dice roll: {}".format(self.game.dice))
+        print("Number of moves: {}".format(len(moves)))
+        print("Moves: {}".format(moves), flush = True)
+
         for (source, dest) in moves:
+            print("Moving from {} to {}".format(source, dest))
             if source is None:
                 self.execute_off_bar(dest)
             elif dest is None:
@@ -218,7 +224,9 @@ class GameDriver():
                 self.execute_hit(source, dest)
             else:
                 self.execute_normal(source, dest)
-
+            self.game.move(source, dest)
+        self.game.turn *= -1
+    
     def execute_off_bar(self, dest):
         turn = 0 if self.game.turn == 1 else 1
         bar = 24
@@ -309,10 +317,11 @@ class GameDriver():
         self.trajectory_node.get_logger().info(f"dest pos {dest_pos}")
         
         self.task_handler.add_state(Tasks.INIT)
-        self.task_handler.add_state(Tasks.TASK_SPLINE, x_final = source_pos, T = 6)
+        self.task_handler.add_state(Tasks.TASK_SPLINE,
+                                    x_final = np.array(source_pos), T = 5)
         self.task_handler.add_state(Tasks.GRIP)
-        self.task_handler.add_state(Tasks.INIT)
-        self.task_handler.add_state(Tasks.TASK_SPLINE, x_final = dest_pos, T = 6)
+        self.task_handler.add_state(Tasks.TASK_SPLINE,
+                                    x_final = np.array(dest_pos), T = 5)
         self.task_handler.add_state(Tasks.GRIP, grip = False)
         self.task_handler.add_state(Tasks.INIT)
 
@@ -330,7 +339,6 @@ class GameDriver():
         #print("Legal moves: {}".format(moves))
         if moves:
             move = random.choice(moves)
-            game.move(move[0], move[1])
             return move
         if not game.num_checkers():
             game.done = True
@@ -338,8 +346,9 @@ class GameDriver():
 
     def handle_turn(self, game):
         moves = []
-        print("Turn played")
         game.roll()
+
+        print("Dice: {}".format(game.dice))
 
         if game.dice[0] == game.dice[1]:
             for _ in range(4):
@@ -360,8 +369,6 @@ class GameDriver():
             if move is not None:
                 moves.append(move)
 
-        game.turn *= -1
-        print("Possible moves after turn played:", moves)
         return moves
 
 # physical representation of the two halves of the board
@@ -488,10 +495,10 @@ class Game:
                 self.state.append(point[0])
             else:
                 self.state.append(-point[1])
+        self.state = np.append(self.state[11::-1], self.state[:11:-1]).tolist()
 
     def roll(self):
         self.dice = np.random.randint(1, 7, size = 2).tolist()
-        print("Rolled Dice:", self.dice)
     
     def move(self, point1, point2):
         if point1 is None:
@@ -545,60 +552,60 @@ class Game:
 
     def possible_moves(self, die):
         moves = []
-        print("Moves at the beginning of possible moves")
+        #print("Moves at the beginning of possible moves")
         # Move off bar
         if self.turn == 1 and self.bar[0]:
-            print("In move off bar turn 1")
+            #print("In move off bar turn 1")
             for point in range(6):
                 if self.is_valid(None, point, die):
-                    print("Inside valid")
+                    #print("Inside valid")
                     moves.append((None, point))
             return moves
         elif self.turn == -1 and self.bar[1]:
-            print("In move off bar turn -1 ")
+            #print("In move off bar turn -1 ")
             for point in range(18, 24):
                 if self.is_valid(None, point, die):
-                    print("Inside valid")
+                    #print("Inside valid")
                     moves.append((None, point))
             return moves
         
         # Move off board
         if self.all_checkers_in_end():
-            print("Inside move off board")
+            #print("Inside move off board")
             if self.turn == 1:
                 for point in range(18, 24):
                     if self.is_valid(point, None, die):
-                        print("Inside valid")
+                        #print("Inside valid")
                         moves.append((point, None))
             elif self.turn == -1:
                 for point in range(6):
                     if self.is_valid(point, None, die):
-                        print("Inside valid")
+                        #print("Inside valid")
                         moves.append((point, None))
 
         # Normal moves
         if not moves:
-            print("Inside normal moves")
+            #print("Inside normal moves")
             for point1 in range(24):
                 for point2 in range(24):
                     if self.is_valid(point1, point2, die):
-                        print("Inside valid")
-                        print("Source point: ",point1)
-                        print("Destination point: ", point2)
+                        #print("Inside valid")
+                        #print("Source point: ",point1)
+                        #print("Destination point: ", point2)
                         moves.append((point1, point2))
 
         # Move off board (again)
         if not moves and self.all_checkers_in_end():
-            print("Inside move off board again")
+            #print("Inside move off board again")
             if self.turn == 1:
                 for point in range(18, 24):
                     if self.is_valid(point, None, die, True):
-                        print("Inside valid")
+                        #print("Inside valid")
                         moves.append((point, None))
             elif self.turn == -1:
                 for point in range(6):
                     if self.is_valid(point, None, die, True):
-                        print("Inside valid")
+                        #print("Inside valid")
                         moves.append((point, None))
     
         return moves
