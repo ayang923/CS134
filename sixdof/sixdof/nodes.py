@@ -377,14 +377,14 @@ class DetectorNode(Node):
                     self.green_beliefs = [[pos,0] for pos in checkers]
                 else:
                     self.green_beliefs = correspondence(checkers, self.green_beliefs)
-                    positions = np.array([group[0] for group in self.green_beliefs])
+                    positions = np.array([group[0] for group in self.green_beliefs if group[1] > 2])
                     self.publish_checkers(positions, color)
             else:
                 if self.brown_beliefs is None:
                     self.brown_beliefs = [[pos,0] for pos in checkers]
                 else:
                     self.brown_beliefs = correspondence(checkers, self.brown_beliefs)
-                    positions = np.array([group[0] for group in self.brown_beliefs])
+                    positions = np.array([group[0] for group in self.brown_beliefs if group[1] > 2])
                     self.publish_checkers(positions, color)
 
         # Checker Mask Troubleshooting
@@ -547,15 +547,15 @@ class DetectorNode(Node):
 
 # helper functions
         
-EXIST = 0.1
-CLEAR = -0.1
+EXIST = 0.3
+CLEAR = -0.15
 
 def correspondence(new, old):
     '''
     new are the freshly detected positions
     old is a list of [[position, log-odds]]
     '''
-    alpha = 0.1
+    alpha = 0.2
     updated = old.copy()
     persisting = np.zeros(len(updated)) # flag whether object in old was detected again
     corresp_ids = np.zeros(len(updated))
@@ -581,10 +581,10 @@ def correspondence(new, old):
                 updated[i][1] += EXIST # increase log odds
             updated[i][0] = [alpha * new[int(corresp_ids[i])][0] + (1-alpha) * updated[i][0][0],
                              alpha * new[int(corresp_ids[i])][1] + (1-alpha) * updated[i][0][1]] # filter position
+    final = []
     for i in range(len(persisting)):
-        print(old[i][1])
-        if old[i][1] < -0.5: # get rid of it if we have very low chance of object still existing
-            updated.pop(i)
+        if old[i][1] > -0.5: # get rid of anything that has a low chance of existing
+            final.append(updated[i])
 
     return updated
             
