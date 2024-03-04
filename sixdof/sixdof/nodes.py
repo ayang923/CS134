@@ -209,6 +209,11 @@ class DetectorNode(Node):
 
         self.best_board_xy = (None,[1.06,0.535],0)
         self.board_buckets = None # nparray of bucket centers
+        self.occupancy = np.array([[5,0], [0,0], [0,0], [0,0], [0,3], [0,0],
+                                   [0,5], [0,0], [0,0], [0,0], [0,0], [2,0],
+                                   [0,2], [0,0], [0,0], [0,0], [0,0], [5,0],
+                                   [0,0], [3,0], [0,0], [0,0], [0,0], [0,5],
+                                   [0,0]]) # basically game representation
         self.best_board_uv = None
         self.best_board_center_uv = None
 
@@ -386,6 +391,8 @@ class DetectorNode(Node):
                     positions = np.array([group[0] for group in self.brown_beliefs if group[1] > 2])
                     self.publish_checkers(positions, color)
 
+        self.update_occupancy()
+
         # Checker Mask Troubleshooting
         ###################################################################
         if color == Color.GREEN:
@@ -400,7 +407,7 @@ class DetectorNode(Node):
         if self.best_board_xy[0] is None: # make sure we have detected the board
             return None
         
-        centers = np.zeros((25,6,2))
+        centers = np.zeros((25,2))
         
         # board dimensions (all in m):
 
@@ -416,44 +423,40 @@ class DetectorNode(Node):
         dL1 = 0.117 - dL # gap between two sections of triangles (minus dL)
 
         for i in np.arange(6):
-            for j in np.arange(6):
-                x = cx + L/2 - dL0 - i*dL
-                y = cy + H/2 - dH/2 - j*dH
-                centers[i][j] = [x,y]
+            x = cx + L/2 - dL0 - i*dL
+            y = cy + H/2 - dH/2 - 3.5*dH
+            centers[i] = [x,y]
 
         for i in np.arange(6,12):
-            for j in np.arange(6):
-                x = cx + L/2 - dL0 - dL1 - i*dL
-                y = cy + H/2 - dH/2 - j*dH
-                centers[i][j] = [x,y]
-
+            x = cx + L/2 - dL0 - dL1 - i*dL
+            y = cy + H/2 - dH/2 - 3.5*dH
+            
         for i in np.arange(12,18):
-            for j in np.arange(6):
-                x = cx + L/2 - dL0 - dL1 - (23-i)*dL
-                y = cy - H/2 + dH/2 + j*dH
-                centers[i][j] = [x,y]
-
+            x = cx + L/2 - dL0 - dL1 - (23-i)*dL
+            y = cy - H/2 + dH/2 + 3.5*dH
+            centers[i] = [x,y]
+            
         for i in np.arange(18,24):
-            for j in np.arange(6):
-                x = cx + L/2 - dL0 - (23-i)*dL
-                y = cy - H/2 + dH/2 + j*dH
-                centers[i][j] = [x,y]
-
-        for j in np.arange(6):
-            x = cx + L/2 - dL0 - 5*dL - (dL1+dL)/2
-            y = cy + 2.5*dH - j*dH
-            centers[24][j] = [x,y]
+            x = cx + L/2 - dL0 - (23-i)*dL
+            y = cy - H/2 + dH/2 + 3.5*dH
+            centers[i][j] = [x,y]
+                
+        x = cx + L/2 - dL0 - 5*dL - (dL1+dL)/2
+        y = cy
+        centers[24] = [x,y] # bar
         
-        rotated_centers = np.zeros((25,6,2))
+        rotated_centers = np.zeros((25,2))
         theta = np.radians(self.best_board_xy[2])
         for i in np.arange(25):
-            for j in np.arange(6):
-                x = centers[i][j][0]*np.cos(theta) - centers[i][j][1]*np.sin(theta)
-                y = centers[i][j][0]*np.sin(theta) + centers[i][j][1]*np.cos(theta)
-                rotated_centers[i][j] = [x,y]
+            x = centers[i][0]*np.cos(theta) - centers[i][1]*np.sin(theta)
+            y = centers[i][0]*np.sin(theta) + centers[i][1]*np.cos(theta)
+            rotated_centers[i] = [x,y]
 
         self.board_buckets = rotated_centers
 
+    def update_occupancy(self):
+        pass
+    
     def draw_best_board(self):
         if self.best_board_xy is not None and self.best_board_uv is not None:
             # draw center
@@ -490,15 +493,20 @@ class DetectorNode(Node):
         if self.board_buckets is None:
             return None
         
-        for row in self.board_buckets:
-            for pos in row:               
-                x = pos[0]
-                y = pos[1]
-                uv = xyToUV(self.Minv,x,y)
-                if uv is not None:
-                    [u, v] = uv
-                    centeruv = np.int0(np.array([u,v]))
-                    cv2.circle(self.rgb,centeruv,radius=15,color=(255,50,50),thickness=2)
+        L = 100 # pixels
+        W = 20 # pixels
+        theta = self.board_buckets[2]
+
+        for row in self.board_buckets:              
+            x = row[0]
+            y = row[1]
+            uv = xyToUV(self.Minv,x,y)
+            if uv is not None:
+                [u, v] = uv
+                centeruv = np.int0(np.array([u,v]))
+                rect_points = cv2.boxPoints(((centeruv[0], centeruv[1]), (W, L), theta))
+                rect_points = np.int0(rect_points)
+                cv2.polylines(self.rgb, [rect_points], isClosed=True, color=(255, 50, 50), thickness=2)
                 
     def publish_checkers(self, checkers, color:Color):
         checkerarray = PoseArray()
