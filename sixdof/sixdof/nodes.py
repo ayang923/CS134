@@ -173,9 +173,6 @@ class DetectorNode(Node):
         self.rcvtipimg = self.create_subscription(Image, '/tip_cam/image_raw',
                                                   self.process_tip_images, 3)
         
-        self.rcvbuckets = self.create_subscription(PoseArray, '/buckets',
-                                                   self.save_buckets, 10)
-        
         # Publishers for detected features:
         # Pose of game board
         self.pub_board = self.create_publisher(Pose, '/boardpose', 3)
@@ -198,8 +195,7 @@ class DetectorNode(Node):
         self.pub_brown_mask = self.create_publisher(Image, 
                                                     '/usb_cam/brown_checker_binary', 3)
         
-        self.pub_markup = self.create_publisher(Image,
-                                                '/usb_cam/markup',3)
+        self.pub_markup = self.create_publisher(Image,'/usb_cam/markup',3)
 
         self.bridge = cv_bridge.CvBridge()
 
@@ -212,12 +208,11 @@ class DetectorNode(Node):
         self.y0 = 0.387
 
         self.best_board_xy = (None,[1.06,0.535],0)
+        self.board_buckets = None # nparray of bucket centers
         self.best_board_uv = None
         self.best_board_center_uv = None
 
         self.board_mask_uv = None
-
-        self.board_buckets = None
 
         self.start_time = 1e-9 * self.get_clock().now().nanoseconds
         self.last_update = None
@@ -247,11 +242,13 @@ class DetectorNode(Node):
         self.detect_checkers(frame, Color.GREEN)
         self.detect_checkers(frame, Color.BROWN)
 
+        ####### Comment out for better performance without viz #######
         self.draw_best_board() # draws current best board in uv on self.rgb
         self.draw_checkers() # draws filtered checker locations
-        self.draw_buckets() # draws current bucket knowledge on self.rgb
+        self.draw_buckets() # draws current bucket knowledge on self.rgb 
 
         self.publish_rgb()
+        ###############################################################
 
     def process_tip_images(self, msg):
         # TODO
@@ -327,6 +324,8 @@ class DetectorNode(Node):
                 rect_uv = np.int0(np.array(rect_uv, dtype=np.float32))
                 self.board_mask_uv = np.uint8(cv2.drawContours(board_msk,[rect_uv],0,200,-1))
 
+        self.update_centers()
+
         if self.board_mask_uv is not None:
             self.pub_board_mask.publish(self.bridge.cv2_to_imgmsg(self.board_mask_uv))
 
@@ -395,11 +394,65 @@ class DetectorNode(Node):
             self.pub_brown_mask.publish(self.bridge.cv2_to_imgmsg(binary))
         ###################################################################
         
-    def save_buckets(self, msg:PoseArray):
+    def update_centers(self):
         # Cannot seem to get this to draw correctly, no idea where the scaling
         # is coming into play. Is self.Minv wrong?
-        #self.get_logger().info('buckets saved')
-        self.board_buckets = msg
+        if self.best_board_xy[0] is None: # make sure we have detected the board
+            return None
+        
+        centers = np.zeros((25,6,2))
+        
+        # board dimensions (all in m):
+
+        cx = self.best_board_xy[0][0]
+        cy = self.best_board_xy[0][1]
+
+        L = 1.061 # board length
+        H = 0.536 # board width
+        dL = 0.067 # triangle to triangle dist
+        dH = 0.040 # checker to checker stack dist
+
+        dL0 = 0.247 # gap from blue side to first triangle center
+        dL1 = 0.117 - dL # gap between two sections of triangles (minus dL)
+
+        for i in np.arange(6):
+            for j in np.arange(6):
+                x = cx + L/2 - dL0 - i*dL
+                y = cy + H/2 - dH/2 - j*dH
+                centers[i][j] = [x,y]
+
+        for i in np.arange(6,12):
+            for j in np.arange(6):
+                x = cx + L/2 - dL0 - dL1 - i*dL
+                y = cy + H/2 - dH/2 - j*dH
+                centers[i][j] = [x,y]
+
+        for i in np.arange(12,18):
+            for j in np.arange(6):
+                x = cx + L/2 - dL0 - dL1 - (23-i)*dL
+                y = cy - H/2 + dH/2 + j*dH
+                centers[i][j] = [x,y]
+
+        for i in np.arange(18,24):
+            for j in np.arange(6):
+                x = cx + L/2 - dL0 - (23-i)*dL
+                y = cy - H/2 + dH/2 + j*dH
+                centers[i][j] = [x,y]
+
+        for j in np.arange(6):
+            x = cx + L/2 - dL0 - 5*dL - (dL1+dL)/2
+            y = cy + 2.5*dH - j*dH
+            centers[24][j] = [x,y]
+        
+        rotated_centers = np.zeros((25,6,2))
+        theta = np.radians(self.best_board_xy[2])
+        for i in np.arange(25):
+            for j in np.arange(6):
+                x = centers[i][j][0]*np.cos(theta) - centers[i][j][1]*np.sin(theta)
+                y = centers[i][j][0]*np.sin(theta) + centers[i][j][1]*np.cos(theta)
+                rotated_centers[i][j] = [x,y]
+
+        self.board_buckets = rotated_centers
 
     def draw_best_board(self):
         if self.best_board_xy is not None and self.best_board_uv is not None:
@@ -435,20 +488,18 @@ class DetectorNode(Node):
 
     def draw_buckets(self):
         if self.board_buckets is None:
-            #self.get_logger().info('no board buckets')
             return None
         
-        for pose in self.board_buckets.poses:
-            x = pose.position.x
-            y = pose.position.y
-            uv = xyToUV(self.Minv,x,y)
-            if uv is not None:
-                [u, v] = uv
-                centeruv = np.int0(np.array([u,v]))
-                cv2.circle(self.rgb,centeruv,radius=10,color=(255,50,50),thickness=2)
-                #cv2.imshow('buckets', self.rgb)
-                #cv2.waitKey(2)
-
+        for row in self.board_buckets:
+            for pos in row:               
+                x = pos[0]
+                y = pos[1]
+                uv = xyToUV(self.Minv,x,y)
+                if uv is not None:
+                    [u, v] = uv
+                    centeruv = np.int0(np.array([u,v]))
+                    cv2.circle(self.rgb,centeruv,radius=15,color=(255,50,50),thickness=2)
+                
     def publish_checkers(self, checkers, color:Color):
         checkerarray = PoseArray()
         if len(checkers > 0):
