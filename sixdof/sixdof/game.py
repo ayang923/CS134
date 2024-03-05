@@ -287,7 +287,7 @@ class GameNode(Node):
             wait for my turn in the init position
         '''
         if self.board_buckets is None or self.checker_locations is None:
-            print('no data')
+            self.get_logger().info('no data')
             return
 
         self.get_logger().info('determine action running')
@@ -602,3 +602,20 @@ class Game:
                 if point < 0:
                     sum -= point
             return sum
+        
+def main(args=None):
+    # Initialize ROS.
+    rclpy.init(args=args)
+
+    # Instantiate the detector node.
+    node = GameNode('traj')
+
+    # Spin the node until interrupted.
+    rclpy.spin(node)
+
+    # Shutdown the node and ROS.
+    node.shutdown()
+    rclpy.shutdown()
+
+if __name__ == "__main__":
+    main()

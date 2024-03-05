@@ -10,6 +10,9 @@ JOINT_NAMES = ['base', 'shoulder', 'elbow', 'wristpitch', 'wristroll', 'grip']
 
 J_EULER = np.array([[0, 1, -1, 1, 0],[0, 0, 0, 0, 1]]).reshape(2,5) # xdot4 = qdot4 / x4 = q4
 
+RIGHT_SIDE_JOINT_ANGLES = np.array([])
+LEFT_SIDE_JOINT_ANGLES = np.array([])
+
 GRIP_OPEN = -0.15
 GRIP_DIE = -0.6
 GRIP_CHECKER = -0.6
@@ -128,7 +131,24 @@ class TaskSplineTask(TaskObject):
             self.done = True
 
         return np.vstack((q,self.q0[5])), np.vstack((qdot,np.zeros((1,1))))
+    
+class JointSplineTask(TaskObject):
+    def __init__(self, start_time, task_manager, side, T=3.0):
+        super().__init__(start_time, task_manager)
+        self.T = T
 
+        if side == 0: # left
+            self.qdest = np.array([0.91, -0.11, 2, -2.34, np.pi/4, self.q0[5,0]]).reshape(-1,1)
+        else: # right
+            self.qdest = np.array([-0.12, -0.11, 2, -2.34, -0.13, self.q0[5,0]]).reshape(-1,1)
+    
+    def evaluate(self, t, dt):
+        t = t - self.start_time - dt
+        if t < self.T:
+            return goto5(t, self.T, self.q0, self.qdest)
+        else:
+            self.done = True
+            return self.task_manager.q, np.zeros((6, 1))
     
 class GripperTask(TaskObject):
     def __init__(self, start_time, task_manager, piece:GamePiece=GamePiece.CHECKER, grip=True):
@@ -161,7 +181,6 @@ class GripperTask(TaskObject):
         
         return np.vstack((self.q0[:5],self.qgrip)), np.vstack((np.zeros((5,1)),qdotgrip))
 
-
 class TaskHandler():
     def __init__(self, node, q0):
         self.node = node
@@ -183,14 +202,6 @@ class TaskHandler():
     def evaluate_task(self, t, dt):
         if self.curr_task_object is None and len(self.tasks) == 0:
             return(self.q.flatten().tolist(), np.zeros((6, 1)).flatten().tolist())
-        elif self.curr_task_object is not None:
-            if self.curr_task_object.done and len(self.tasks) == 0:
-                self.node.get_logger().info('ready for move set to true')
-                self.node.ready_for_move = True
-                return(self.q.flatten().tolist(), np.zeros((6, 1)).flatten().tolist())
-            elif self.curr_task_object.done and len(self.tasks) != 0:
-                new_task_type, new_task_data = self.tasks.pop(0)
-                self.set_state(new_task_type, t, **new_task_data)
         elif (self.curr_task_object is None or self.curr_task_object.done) and len(self.tasks) != 0:
             new_task_type, new_task_data = self.tasks.pop(0)
             self.set_state(new_task_type, t, **new_task_data)
@@ -207,6 +218,8 @@ class TaskHandler():
         self.curr_task_type = task_type
         if task_type == Tasks.INIT:
             self.curr_task_object = InitTask(t, self)
+        elif task_type == Tasks.JOINT_SPLINE:
+            self.curr_task_object = JointSplineTask(t, self, **kwargs)
         elif task_type == Tasks.TASK_SPLINE:
             self.curr_task_object = TaskSplineTask(t, self, **kwargs)
         elif task_type == Tasks.GRIP:
@@ -221,16 +234,24 @@ class TaskHandler():
         self.tasks = [InitTask]
 
     def move_checker(self, source_pos, dest_pos):
-        source_pos = np.append(source_pos,[0.02, -np.pi / 2, float((np.pi/2 - np.arctan2(source_pos[1], source_pos[0])) % np.pi/2)])
-        dest_pos = np.append(dest_pos, [0.02, -np.pi / 2, float((np.pi/2 - np.arctan2(dest_pos[1], dest_pos[0])) % np.pi/2)])
+        #anglestring = 'angle' + str((np.pi/2 - np.arctan2(source_pos[1], source_pos[0])) % np.pi/2)
+        #self.node.get_logger().info(anglestring)
+        source_pos = np.append(source_pos,[0.005, -np.pi / 2, float((np.pi/2 - np.arctan2(source_pos[1], source_pos[0])) % np.pi/2)])
+        dest_pos = np.append(dest_pos, [0.005, -np.pi / 2, float((np.pi/2 - np.arctan2(dest_pos[1], dest_pos[0])) % np.pi/2)])
 
         self.node.get_logger().info(f"source pos {source_pos}")
         self.node.get_logger().info(f"dest pos {dest_pos}")
         
-        self.add_state(Tasks.INIT)
+        if source_pos[0] < -0.1:
+            self.add_state(Tasks.JOINT_SPLINE, side=0, T = 5)
+        else:
+            self.add_state(Tasks.JOINT_SPLINE, side=1, T = 5)
         self.add_state(Tasks.TASK_SPLINE,x_final = np.array(source_pos), T = 5)
         self.add_state(Tasks.GRIP)
-        self.add_state(Tasks.INIT)
+        if dest_pos[0] < -0.1:
+            self.add_state(Tasks.JOINT_SPLINE, side=0, T = 5)
+        else:
+            self.add_state(Tasks.JOINT_SPLINE, side=1, T = 5)
         self.add_state(Tasks.TASK_SPLINE,x_final = np.array(dest_pos), T = 5)
         self.add_state(Tasks.GRIP, grip = False)
         self.add_state(Tasks.INIT)
