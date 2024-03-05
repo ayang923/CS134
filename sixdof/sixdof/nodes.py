@@ -135,12 +135,14 @@ class TrajectoryNode(Node):
         # Compute the desired joint positions and velocities for this time.
         if self.ready_for_move:
             if self.request_time is None:
+                self.get_logger().info('initial move request')
                 self.request_time = self.get_time()
                 msg = Bool()
                 msg.data = self.ready_for_move
                 self.moveready_pub.publish(msg)
                 self.ready_for_move = False
-            elif self.t - self.request_time > 3:
+            elif self.t - self.request_time > 20:
+                self.get_logger().info('timer move request')
                 self.request_time = self.get_time()
                 msg = Bool()
                 msg.data = self.ready_for_move

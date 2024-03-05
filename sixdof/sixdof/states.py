@@ -185,6 +185,7 @@ class TaskHandler():
             return(self.q.flatten().tolist(), np.zeros((6, 1)).flatten().tolist())
         elif self.curr_task_object is not None:
             if self.curr_task_object.done and len(self.tasks) == 0:
+                self.node.get_logger().info('ready for move set to true')
                 self.node.ready_for_move = True
                 return(self.q.flatten().tolist(), np.zeros((6, 1)).flatten().tolist())
             elif self.curr_task_object.done and len(self.tasks) != 0:
@@ -220,8 +221,8 @@ class TaskHandler():
         self.tasks = [InitTask]
 
     def move_checker(self, source_pos, dest_pos):
-        source_pos = np.append(source_pos,[0.05, -np.pi / 2, float(np.pi / 2 - np.arctan2(source_pos[1], source_pos[0]))])
-        dest_pos = np.append(dest_pos, [0.05, -np.pi / 2, float(np.pi / 2 - np.arctan2(dest_pos[1], dest_pos[0]))])
+        source_pos = np.append(source_pos,[0.02, -np.pi / 2, float((np.pi/2 - np.arctan2(source_pos[1], source_pos[0])) % np.pi/2)])
+        dest_pos = np.append(dest_pos, [0.02, -np.pi / 2, float((np.pi/2 - np.arctan2(dest_pos[1], dest_pos[0])) % np.pi/2)])
 
         self.node.get_logger().info(f"source pos {source_pos}")
         self.node.get_logger().info(f"dest pos {dest_pos}")
@@ -229,6 +230,7 @@ class TaskHandler():
         self.add_state(Tasks.INIT)
         self.add_state(Tasks.TASK_SPLINE,x_final = np.array(source_pos), T = 5)
         self.add_state(Tasks.GRIP)
+        self.add_state(Tasks.INIT)
         self.add_state(Tasks.TASK_SPLINE,x_final = np.array(dest_pos), T = 5)
         self.add_state(Tasks.GRIP, grip = False)
         self.add_state(Tasks.INIT)

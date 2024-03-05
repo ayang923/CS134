@@ -290,7 +290,7 @@ class GameNode(Node):
             print('no data')
             return
 
-        print('determine action running')
+        self.get_logger().info('determine action running')
         
         self.game.set_state(self.gamestate)
         moves = self.handle_turn(self.game)
@@ -313,6 +313,7 @@ class GameNode(Node):
             else:
                 self.execute_normal(source, dest)
             self.game.move(source, dest)
+            self.get_logger().info("exectued the move")
         self.game.turn *= -1
     
     def execute_off_bar(self, dest):
@@ -453,8 +454,10 @@ class Game:
         self.state = []
         self.bar = gamestate[24]
         for point in gamestate[:24]:
+            # If the column has a green
             if point[0]:
                 self.state.append(point[0])
+            # If the columan has a brown
             else:
                 self.state.append(-point[1])
         #self.state = np.append(self.state[11::], self.state[:11:]).tolist()
@@ -465,6 +468,7 @@ class Game:
     def move(self, point1, point2):
         if point1 is None:
             self.bar[0 if self.turn == 1 else 1] -= 1
+        # The move turn of player One
         if self.turn == 1:
             if point2 is None:
                 self.state[point1] -= 1
@@ -477,6 +481,7 @@ class Game:
                     self.state[point1] -= 1
                 self.state[point2] = 1
                 self.bar[1] += 1
+        # The move turn of player Two
         elif self.turn == -1:
             if point2 is None:
                 self.state[point1] += 1
