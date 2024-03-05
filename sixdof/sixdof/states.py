@@ -1,6 +1,6 @@
-from sixdof.TrajectoryUtils import *
-from sixdof.KinematicChain import *
-from sixdof.TransformHelpers import *
+from sixdof.utils.TrajectoryUtils import *
+from sixdof.utils.KinematicChain import *
+from sixdof.utils.TransformHelpers import *
 
 from enum import Enum
 import numpy as np

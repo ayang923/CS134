@@ -1,4 +1,4 @@
-from geometry_msgs.msg  import Point, Pose, Quaternion, PoseArray
+from geometry_msgs.msg  import Pose, PoseArray
 from std_msgs.msg import UInt8MultiArray, Bool
 
 from enum import Enum
@@ -8,9 +8,7 @@ from rclpy.node         import Node
 import numpy as np
 import random
 
-from sixdof.TransformHelpers import *
-
-import matplotlib.pyplot as plt
+from sixdof.utils.TransformHelpers import *
 
 from sixdof.states import *
 

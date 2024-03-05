@@ -25,8 +25,6 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'main       = sixdof.main:main',
-            'detectors       = sixdof.detectors:main',
             'det             = sixdof.detnode:main',
             'traj            = sixdof.trajnode:main',
             'game            = sixdof.game:main',

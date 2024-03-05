@@ -2,13 +2,13 @@ import numpy as np
 import rclpy
 
 from rclpy.node         import Node
-from sensor_msgs.msg    import JointState, Image
-from geometry_msgs.msg  import Point, Pose, Quaternion, PoseArray
-from std_msgs.msg       import UInt8MultiArray, Bool
+from sensor_msgs.msg    import JointState
+from geometry_msgs.msg  import PoseArray
+from std_msgs.msg       import Bool
 
-from sixdof.TransformHelpers import *
+from sixdof.utils.TransformHelpers import *
 
-from sixdof.states import Tasks, GamePiece, TaskHandler, JOINT_NAMES
+from sixdof.states import Tasks, TaskHandler, JOINT_NAMES
 
 RATE = 100.0            # Hertz
 

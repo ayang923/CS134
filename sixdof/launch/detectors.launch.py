@@ -75,9 +75,9 @@ def generate_launch_description():
 
     # Configure a node for the simple demo.
     node_detector = Node(
-        name       = 'detectors', 
+        name       = 'det', 
         package    = 'sixdof',
-        executable = 'detectors',
+        executable = 'det',
         output     = 'screen')
 
 

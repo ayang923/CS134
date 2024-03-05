@@ -4,16 +4,13 @@ import rclpy
 import cv2, cv_bridge
 
 from rclpy.node         import Node
-from sensor_msgs.msg    import JointState, Image
-from geometry_msgs.msg  import Point, Pose, Quaternion, PoseArray
-from std_msgs.msg       import UInt8MultiArray, Bool
+from sensor_msgs.msg    import Image
+from geometry_msgs.msg  import Pose, PoseArray
+from std_msgs.msg       import UInt8MultiArray
 
-from sixdof.TransformHelpers import *
+from sixdof.utils.TransformHelpers import *
 
-#from sixdof.game import GameDriver, Color
 from sixdof.game import Color
-
-from enum import Enum
 
 GREEN_CHECKER_LIMITS = np.array(([30, 70], [25, 80], [30, 90]))
 BROWN_CHECKER_LIMITS = np.array(([100, 150], [20, 75], [90, 160]))
