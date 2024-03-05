@@ -91,7 +91,7 @@ class TaskSplineTask(TaskObject):
         # Pick the convergence bandwidth.
         self.lam = lam
 
-        self.x_final = x_final.reshape(5,1)
+        self.x_final = np.array(x_final).reshape(5,1)
         self.T = T
     
     def evaluate(self, t, dt):
@@ -117,13 +117,14 @@ class TaskSplineTask(TaskObject):
             J_inv = V.T @ diagsvd(S_inv, *J.T.shape) @ U.T
 
             qdot = J_inv@(vd + self.lam * e)
+
             q = qlast + qdot*dt
 
-            self.q = q
+            self.q = np.array(q)
             self.pd = pd
 
         else:
-            q, qdot = self.q, np.zeros((5, 1))
+            q, qdot = np.array(self.q), np.zeros((5, 1))
             self.done = True
 
         return np.vstack((q,self.q0[5])), np.vstack((qdot,np.zeros((1,1))))
@@ -182,6 +183,13 @@ class TaskHandler():
     def evaluate_task(self, t, dt):
         if self.curr_task_object is None and len(self.tasks) == 0:
             return(self.q.flatten().tolist(), np.zeros((6, 1)).flatten().tolist())
+        elif self.curr_task_object is not None:
+            if self.curr_task_object.done and len(self.tasks) == 0:
+                self.node.ready_for_move = True
+                return(self.q.flatten().tolist(), np.zeros((6, 1)).flatten().tolist())
+            elif self.curr_task_object.done and len(self.tasks) != 0:
+                new_task_type, new_task_data = self.tasks.pop(0)
+                self.set_state(new_task_type, t, **new_task_data)
         elif (self.curr_task_object is None or self.curr_task_object.done) and len(self.tasks) != 0:
             new_task_type, new_task_data = self.tasks.pop(0)
             self.set_state(new_task_type, t, **new_task_data)
@@ -207,6 +215,23 @@ class TaskHandler():
         return self.state_object.evaluate
     
     # Macro Add Behavior Functions
+
+    def clear(self):
+        self.tasks = [InitTask]
+
+    def move_checker(self, source_pos, dest_pos):
+        source_pos = np.append(source_pos,[0.05, -np.pi / 2, float(np.pi / 2 - np.arctan2(source_pos[1], source_pos[0]))])
+        dest_pos = np.append(dest_pos, [0.05, -np.pi / 2, float(np.pi / 2 - np.arctan2(dest_pos[1], dest_pos[0]))])
+
+        self.node.get_logger().info(f"source pos {source_pos}")
+        self.node.get_logger().info(f"dest pos {dest_pos}")
+        
+        self.add_state(Tasks.INIT)
+        self.add_state(Tasks.TASK_SPLINE,x_final = np.array(source_pos), T = 5)
+        self.add_state(Tasks.GRIP)
+        self.add_state(Tasks.TASK_SPLINE,x_final = np.array(dest_pos), T = 5)
+        self.add_state(Tasks.GRIP, grip = False)
+        self.add_state(Tasks.INIT)
 
     def pick_and_drop(self, pos):
         p1 = np.array([pos[0], pos[1], pos[2] + 0.05, -np.pi / 2, 0]).reshape(-1, 1)

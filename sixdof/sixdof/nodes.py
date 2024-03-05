@@ -6,17 +6,20 @@ import cv2, cv_bridge
 from rclpy.node         import Node
 from sensor_msgs.msg    import JointState, Image
 from geometry_msgs.msg  import Point, Pose, Quaternion, PoseArray
-from std_msgs.msg       import UInt8MultiArray
+from std_msgs.msg       import UInt8MultiArray, Bool
 
 from sixdof.TrajectoryUtils import goto, goto5
 from sixdof.TransformHelpers import *
 
 from sixdof.states import Tasks, GamePiece, TaskHandler, JOINT_NAMES
-from sixdof.game import GameDriver, Color
+#from sixdof.game import GameDriver, Color
+from sixdof.game import Color
 
 from enum import Enum
 
 import matplotlib.pyplot as plt
+
+from itertools import zip_longest
 
 RATE = 100.0            # Hertz
 
@@ -58,16 +61,20 @@ class TrajectoryNode(Node):
         # /joint_states from Hebi node
         self.fbksub = self.create_subscription(JointState, '/joint_states',
                                                self.recvfbk, 100)
+        
+        self.clear_sub = self.create_subscription(Bool, '/clear', self.rcvaction, 10)
+        self.checker_move_sub = self.create_subscription(PoseArray, '/checker_move',
+                                                       self.rcvaction, 10)
+        self.dice_roll_sub = self.create_subscription(PoseArray, '/dice_roll',
+                                                    self.rcvaction, 10)
 
         # creates task handler for robot
         self.task_handler = TaskHandler(self, np.array(self.position0).reshape(-1, 1))
 
-        #self.task_handler.add_state(Tasks.INIT)
+        self.task_handler.add_state(Tasks.INIT)
 
-        # game driver for trajectory node
-        self.game_driver = GameDriver(self, self.task_handler)
-        self.test_bucket_pub = self.create_publisher(PoseArray, '/buckets', 10)
-        self.game_state_timer = self.create_timer(1, self.game_driver.update_gamestate)
+        self.ready_for_move = False
+        self.moveready_pub = self.create_publisher(Bool, '/move_ready', 1)
 
         # Create a timer to keep calculating/sending commands.
         rate       = RATE
@@ -76,11 +83,25 @@ class TrajectoryNode(Node):
                                (self.timer.timer_period_ns * 1e-9, rate))
         self.start_time = 1e-9 * self.get_clock().now().nanoseconds
 
-        self.last_process = None
+        self.request_time = None
 
     # Called repeatedly by incoming messages - do nothing for now
     def recvfbk(self, fbkmsg):
         self.actpos = list(fbkmsg.position)
+
+    def rcvaction(self, msg):
+        if type(msg) is Bool:
+            if msg.data == True:
+                self.task_handler.clear()
+        elif type(msg) is PoseArray:
+            if len(msg.poses) == 2:
+                action = []
+                for pose in msg.poses:
+                    p = p_from_T(T_from_Pose(pose))
+                    action.append([p[0],p[1]])              
+                self.task_handler.move_checker(action[0],action[1])
+            else:
+                pass
 
     # Shutdown
     def shutdown(self):
@@ -112,9 +133,20 @@ class TrajectoryNode(Node):
     def update(self):
         self.t = self.get_time()
         # Compute the desired joint positions and velocities for this time.
-        if self.last_process is None or self.last_process - self.t > 0.5:
-            self.last_process = self.get_time()
-            self.game_driver.determine_action()
+        if self.ready_for_move:
+            if self.request_time is None:
+                self.request_time = self.get_time()
+                msg = Bool()
+                msg.data = self.ready_for_move
+                self.moveready_pub.publish(msg)
+                self.ready_for_move = False
+            elif self.t - self.request_time > 3:
+                self.request_time = self.get_time()
+                msg = Bool()
+                msg.data = self.ready_for_move
+                self.moveready_pub.publish(msg)
+                self.ready_for_move = False
+
 
         desired = self.task_handler.evaluate_task(self.t, 1 / RATE)
         if desired is None:
@@ -235,7 +267,8 @@ class DetectorNode(Node):
         # Convert into OpenCV image, using RGB 8-bit (pass-through).
         frame = self.bridge.imgmsg_to_cv2(msg, "passthrough")
 
-        if self.last_update is None or self.get_time() - self.last_update > 1:
+        if (self.last_update is None or self.get_time() - self.last_update > 1 or
+            self.best_board_xy[0] is None):
             self.set_M(frame)
             self.set_Minv(frame)
             self.detect_board(frame)    
@@ -246,6 +279,7 @@ class DetectorNode(Node):
 
         self.detect_checkers(frame, Color.GREEN)
         self.detect_checkers(frame, Color.BROWN)
+        self.update_occupancy()
 
         ####### Comment out for better performance without viz #######
         self.draw_best_board() # draws current best board in uv on self.rgb
@@ -302,7 +336,11 @@ class DetectorNode(Node):
             contour_xy = np.array(contour_xy, dtype=np.float32)
             
             # get min area rect in xy
-            bound = cv2.minAreaRect(contour_xy)
+            try: 
+                bound = cv2.minAreaRect(contour_xy)
+            except:
+                print('convexhull error')
+                return None
 
             # filter
             if (abs(bound[2] - self.best_board_xy[2]) < 25 and # not a bad angle
@@ -391,7 +429,6 @@ class DetectorNode(Node):
                     positions = np.array([group[0] for group in self.brown_beliefs if group[1] > 2])
                     self.publish_checkers(positions, color)
 
-        self.update_occupancy()
 
         # Checker Mask Troubleshooting
         ###################################################################
@@ -424,22 +461,23 @@ class DetectorNode(Node):
 
         for i in np.arange(6):
             x = cx + L/2 - dL0 - i*dL
-            y = cy + H/2 - dH/2 - 3.5*dH
+            y = cy + H/2 - dH/2 - 2.5*dH
             centers[i] = [x,y]
 
         for i in np.arange(6,12):
             x = cx + L/2 - dL0 - dL1 - i*dL
-            y = cy + H/2 - dH/2 - 3.5*dH
+            y = cy + H/2 - dH/2 - 2.5*dH
+            centers[i] = [x,y]
             
         for i in np.arange(12,18):
             x = cx + L/2 - dL0 - dL1 - (23-i)*dL
-            y = cy - H/2 + dH/2 + 3.5*dH
+            y = cy - H/2 + dH/2 + 2.5*dH
             centers[i] = [x,y]
             
         for i in np.arange(18,24):
             x = cx + L/2 - dL0 - (23-i)*dL
-            y = cy - H/2 + dH/2 + 3.5*dH
-            centers[i][j] = [x,y]
+            y = cy - H/2 + dH/2 + 2.5*dH
+            centers[i] = [x,y]
                 
         x = cx + L/2 - dL0 - 5*dL - (dL1+dL)/2
         y = cy
@@ -455,7 +493,39 @@ class DetectorNode(Node):
         self.board_buckets = rotated_centers
 
     def update_occupancy(self):
-        pass
+        self.occupancy = np.array([[0,0], [0,0], [0,0], [0,0], [0,0], [0,0],
+                                   [0,0], [0,0], [0,0], [0,0], [0,0], [0,0],
+                                   [0,0], [0,0], [0,0], [0,0], [0,0], [0,0],
+                                   [0,0], [0,0], [0,0], [0,0], [0,0], [0,0],
+                                   [0,0]])
+        if self.green_beliefs is None or self.brown_beliefs is None or self.board_buckets is None:
+            return None
+        for green in self.green_beliefs:
+            for bucket in self.board_buckets:
+                xmin = bucket[0] - 0.03
+                xmax = bucket[0] + 0.03
+                ymin = bucket[1] - 0.13
+                ymax = bucket[1] + 0.13
+                xg = green[0][0]
+                yg = green[0][1]
+                if ((xg >= xmin and xg <= xmax) and (yg >= ymin and yg <= ymax) and 
+                    green[1]>= 1.5):
+                    bucket_ind = np.where(self.board_buckets == bucket)[0][0]
+                    self.occupancy[bucket_ind][0] += 1
+        for brown in self.brown_beliefs:
+            for bucket in self.board_buckets:
+                xmin = bucket[0] - 0.03
+                xmax = bucket[0] + 0.03
+                ymin = bucket[1] - 0.13
+                ymax = bucket[1] + 0.13
+                xb = green[0][0]
+                yb = green[0][1]
+                xb = brown[0][0]
+                yb = brown[0][1]
+                if ((xb >= xmin and xb <= xmax) and (yb >= ymin and yb <= ymax) and 
+                    brown[1]>= 1.5):
+                    bucket_ind = np.where(self.board_buckets == bucket)[0][0]
+                    self.occupancy[bucket_ind][1] += 1
     
     def draw_best_board(self):
         if self.best_board_xy is not None and self.best_board_uv is not None:
@@ -490,12 +560,12 @@ class DetectorNode(Node):
                         cv2.circle(self.rgb, np.int0(np.array([u,v])), radius=15, color=(0,255,0), thickness=3)
 
     def draw_buckets(self):
-        if self.board_buckets is None:
+        if self.best_board_xy[0] is None:
             return None
         
-        L = 100 # pixels
-        W = 20 # pixels
-        theta = self.board_buckets[2]
+        L = 150.0 # pixels
+        W = 40.0 # pixels
+        theta = -self.best_board_xy[2]
 
         for row in self.board_buckets:              
             x = row[0]
@@ -503,10 +573,42 @@ class DetectorNode(Node):
             uv = xyToUV(self.Minv,x,y)
             if uv is not None:
                 [u, v] = uv
-                centeruv = np.int0(np.array([u,v]))
-                rect_points = cv2.boxPoints(((centeruv[0], centeruv[1]), (W, L), theta))
+                centeruv = np.array([float(u),float(v)])
+                rect_points = cv2.boxPoints(((centeruv[0],centeruv[1]), (W, L), theta))
                 rect_points = np.int0(rect_points)
                 cv2.polylines(self.rgb, [rect_points], isClosed=True, color=(255, 50, 50), thickness=2)
+                # Writing the number of elements in the buckets with color identification
+                checker_nums = self.check_bucket(row)
+                font = cv2.FONT_HERSHEY_SIMPLEX 
+                xg = x - 0.03
+                xb = x 
+                if np.where(self.board_buckets == row)[0][0] < 12:
+                    ygb = y + 0.13
+                    uvg = xyToUV(self.Minv,xg,ygb)
+                    uvb = xyToUV(self.Minv,xb,ygb)
+                    centergreen = tuple(np.int0(np.array([float(uvg[0]),float(uvg[1])])))
+                    centerbrown = tuple(np.int0(np.array([float(uvb[0]),float(uvb[1])])))
+                elif np.where(self.board_buckets == row)[0][0] < 24:
+                    ygb = y - 0.13
+                    uvg = xyToUV(self.Minv,xg,ygb)
+                    uvb = xyToUV(self.Minv,xb,ygb)
+                    centergreen = tuple(np.int0(np.array([float(uvg[0]),float(uvg[1])])))
+                    centerbrown = tuple(np.int0(np.array([float(uvb[0]),float(uvb[1])])))
+                else:
+                    ygb = y
+                    uvg = xyToUV(self.Minv,xg,ygb)
+                    uvb = xyToUV(self.Minv,xb,ygb)
+                    centergreen = tuple(np.int0(np.array([float(uvg[0]),float(uvg[1])])))
+                    centerbrown = tuple(np.int0(np.array([float(uvb[0]),float(uvb[1])])))
+                    
+                cv2.putText(self.rgb, str(checker_nums[0]),centergreen, font, fontScale=1,color=(0, 255, 0),thickness=2)
+                cv2.putText(self.rgb, str(checker_nums[1]),centerbrown, font, fontScale=1,color=(0, 0, 255),thickness=2)
+                
+    def check_bucket(self, bucket):
+        bucket_ind = np.where(self.board_buckets == bucket)[0][0]
+        green_count = self.occupancy[bucket_ind][0]
+        brown_count = self.occupancy[bucket_ind][1]
+        return [green_count, brown_count]
                 
     def publish_checkers(self, checkers, color:Color):
         checkerarray = PoseArray()

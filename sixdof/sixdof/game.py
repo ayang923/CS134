@@ -1,5 +1,5 @@
 from geometry_msgs.msg  import Point, Pose, Quaternion, PoseArray
-from std_msgs.msg import UInt8MultiArray
+from std_msgs.msg import UInt8MultiArray, Bool
 
 from enum import Enum
 
@@ -18,36 +18,42 @@ class Color(Enum):
     GREEN = 1
     BROWN = 2
 
-LOCC = 0.3
-LFREE = -0.05
-
 # class passed into trajectory node to handle game logic
-class GameDriver():
-    def __init__(self, trajectory_node:Node, task_handler):
-        self.trajectory_node = trajectory_node
-        self.task_handler = task_handler
+class GameNode(Node):
+    def __init__(self, name):
+        super().__init__(name)
         
         # /boardpose from Detector
-        self.sub_board = self.trajectory_node.create_subscription(Pose, '/boardpose',
+        self.sub_board = self.create_subscription(Pose, '/boardpose',
                                                                   self.recvboard, 3)
 
         # Poses of all detected green checkers, /green from Detector
-        self.sub_green = self.trajectory_node.create_subscription(PoseArray, '/green',
+        self.sub_green = self.create_subscription(PoseArray, '/green',
                                                                   self.recvgreen, 3)
 
         # Poses of all detected brown checkers, /brown from Detector
-        self.sub_brown = self.trajectory_node.create_subscription(PoseArray, '/brown',
+        self.sub_brown = self.create_subscription(PoseArray, '/brown',
                                                                   self.recvbrown, 3)
 
         # /dice Unsigned int array with value of two detected dice from Detector
-        self.sub_dice = self.trajectory_node.create_subscription(UInt8MultiArray, '/dice',
+        self.sub_dice = self.create_subscription(UInt8MultiArray, '/dice',
                                                                  self.recvdice, 3)
         
-        # Representation of physical game board
-        self.game_board = GameBoard()
+        self.sub_moveready = self.create_subscription(Bool, '/move_ready',
+                                                      self.determine_action, 1)
+        
+        self.determining = False
+        
+        self.pub_clear = self.create_publisher(Bool, '/clear', 10)
+        self.pub_checker_move = self.create_publisher(PoseArray, '/checker_move', 10)
+        self.pub_dice_roll = self.create_publisher(PoseArray, '/dice_roll', 10)
 
-        # log odds representation of occupancy by [green,brown]
-        self.logoddsgrid = np.zeros((25,6,2))
+        # Physical Game Board Info
+        self.board_x = None
+        self.board_y = None
+        self.board_theta = None # radians
+        self.board_buckets = None # center locations [x,y]
+        self.grid_centers = None # for placing
 
         # Initial gamestate area assumes setup for beginning of game
         # each element indicates [num_green, num_brown]
@@ -58,6 +64,12 @@ class GameDriver():
                                    [0,2], [0,0], [0,0], [0,0], [0,0], [5,0],
                                    [0,0], [3,0], [0,0], [0,0], [0,0], [0,5],
                                    [0,0]])
+
+        # each entry has a list of [x,y] positions of the checkers in that bar
+        # right now basically redundant with gamestate
+        self.checker_locations = None
+        
+        self.scored = 0
 
         # self.recvgreen populates these arrays with detected green checker pos
         self.greenpos = None
@@ -77,11 +89,10 @@ class GameDriver():
         in: /boardpose PoseArray
         updates self.boardpose
         '''
-        #self.trajectory_node.get_logger().info("Board Received")
-        self.game_board.filtered_board_update(msg)
-        self.pub_buckets()
+        self.save_board_dims(msg)
+        self.update_centers()
 
-    def recvgreen(self, msg):
+    def recvgreen(self, msg:PoseArray):
         '''
         given most recent batch of green positions and board pose, update
         self.greenpos, self.logoddsgrid, and self.gamestate
@@ -99,10 +110,9 @@ class GameDriver():
             xy = [pose.position.x, pose.position.y]
             self.greenpos.append(xy)
         self.greenpos = np.array(self.greenpos)
-        self.update_log_odds(Color.GREEN)
-        #self.update_gamestate()
+        self.sort_checkers()
 
-    def recvbrown(self, msg):
+    def recvbrown(self, msg:PoseArray):
         '''
         same as above, but for brown
         '''
@@ -111,8 +121,7 @@ class GameDriver():
             xy = [pose.position.x, pose.position.y]
             self.brownpos.append(xy)
         self.brownpos = np.array(self.brownpos)
-        self.update_log_odds(Color.BROWN)
-        #self.update_gamestate()
+        self.sort_checkers()
 
     def recvdice(self, msg):
         '''
@@ -125,63 +134,138 @@ class GameDriver():
         '''
         pass
 
-    def update_log_odds(self, color:Color):   
-        '''
-        update log odds ratio for each of the grid spaces
-        each space has p_green and p_brown (for being occupied by a green
-        or brown checker respectively), but should implement some logic
-        about columns only being able to contain one color? + complain if this
-        is not the case?
+    def save_board_dims(self, msg:Pose):
+        self.board_x = msg.position.x
+        self.board_y = msg.position.y
+        R = R_from_T(T_from_Pose(msg))
+        t = np.arctan2(R[1,0],R[0,0]) # undo rotz
+        self.board_theta = t
 
-        in: self (need self.greenpos and self.brownpos)
+    def update_centers(self):
+        centers = np.zeros((25,2))
+        grid = np.zeros((25,6,2))
         
-        updates self.logoddsgrid given the values in self.greenpos and self.brownpos
-        from the most recent processed frame
+        # board dimensions (all in m):
 
-        use self.game_board.set_grid_centers() to determine how to increment/decrement the log
-        odds grid given the detected checker positions.
-        FIXME not working
-        '''
-        if self.game_board.centers is None:
+        cx = self.board_x
+        cy = self.board_y
+
+        L = 1.061 # board length
+        H = 0.536 # board width
+        dL = 0.067 # triangle to triangle dist
+        dH = 0.040 # checker to checker stack dist
+
+        dL0 = 0.247 # gap from blue side to first triangle center
+        dL1 = 0.117 - dL # gap between two sections of triangles (minus dL)
+
+        for i in np.arange(6):
+            x = cx + L/2 - dL0 - i*dL
+            y = cy + H/2 - dH/2 - 2.5*dH
+            centers[i] = [x,y]
+            for j in np.arange(6):
+                y = cy + H/2 - dH/2 - j*dH
+                grid[i][j] = [x,y]
+
+        for i in np.arange(6,12):
+            x = cx + L/2 - dL0 - dL1 - i*dL
+            y = cy + H/2 - dH/2 - 2.5*dH
+            centers[i] = [x,y]
+            for j in np.arange(6):
+                y = cy + H/2 - dH/2 - j*dH
+                grid[i][j] = [x,y]
             
-            return None
-
-        if color == Color.GREEN:
-            posarray = self.greenpos
-        else:
-            posarray = self.brownpos
-        for i in np.arange(25):
+        for i in np.arange(12,18):
+            x = cx + L/2 - dL0 - dL1 - (23-i)*dL
+            y = cy - H/2 + dH/2 + 2.5*dH
+            centers[i] = [x,y]
             for j in np.arange(6):
-                filled = False
-                center = self.game_board.centers[i][j]
-                for pos in posarray:
-                    if np.sqrt((center[0]-pos[0])**2 + (center[1]-pos[1])**2) < 0.02 and filled == False:
-                        if self.logoddsgrid[i][j][color.value - 1] < 4: #probability of 0.98 limit
-                            self.logoddsgrid[i][j][color.value - 1] += LOCC
-                        filled = True
-                if filled == False and (self.logoddsgrid[i][j][color.value - 1] > -2): # also limit on lower end for being free
-                    self.logoddsgrid[i][j][color.value - 1] += LFREE
+                y = cy - H/2 + dH/2 + j*dH
+                grid[i][j] = [x,y]                
+
+    
+        for i in np.arange(18,24):
+            x = cx + L/2 - dL0 - (23-i)*dL
+            y = cy - H/2 + dH/2 + 2.5*dH
+            centers[i] = [x,y]
+            for j in np.arange(6):
+                y = cy - H/2 + dH/2 + j*dH
+                grid[i][j] = [x,y]
                 
-
-    def update_gamestate(self):
-        '''
-        FIXME not sure if this works
-        '''
-        prob = 1 - 1 / (1 + np.exp(self.logoddsgrid))
-        for i in np.arange(25):
-            greencount = 0
-            browncount = 0
-            for j in np.arange(6):
-                if prob[i][j][0] > 0.8:
-                    greencount += 1
-                elif prob[i][j][1] > 0.8:
-                    browncount += 1
-            self.gamestate[i] = [greencount,browncount] # FIXME this is a dumb way to do it
-        #self.trajectory_node.get_logger().info("Updated Game State:") #For debuggin purposes
-        #self.trajectory_node.get_logger().info(str(self.gamestate))
+        x = cx + L/2 - dL0 - 5*dL - (dL1+dL)/2
+        y = cy
+        centers[24] = [x,y] # bar
+        for j in np.arange(6):
+            y = cy + 2.5*dH - j*dH
+            grid[24][j] = [x,y]
         
+        rotated_centers = np.zeros((25,2))
+        rotated_grid_centers = np.zeros((25,6,2))
+        theta = self.board_theta
+        for i in np.arange(25):
+            x = centers[i][0]*np.cos(theta) - centers[i][1]*np.sin(theta)
+            y = centers[i][0]*np.sin(theta) + centers[i][1]*np.cos(theta)
+            rotated_centers[i] = [x,y]
+            for j in np.arange(6):
+                x = grid[i][j][0]*np.cos(theta) - grid[i][j][1]*np.sin(theta)
+                y = grid[i][j][0]*np.sin(theta) + grid[i][j][1]*np.cos(theta)
+                rotated_grid_centers[i][j] = [x,y]
 
-    def determine_action(self):
+        self.board_buckets = rotated_centers
+        self.grid_centers = rotated_grid_centers
+
+    def sort_checkers(self):
+        checker_locations = [[[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
+                             [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
+                             [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
+                             [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
+                             [[],[]]]
+        
+        if self.greenpos is None or self.brownpos is None or self.board_buckets is None:
+            return
+
+        for green in self.greenpos:
+            for bucket in self.board_buckets:
+                xg = green[0]
+                yg = green[1]
+                xmin = bucket[0] - 0.03
+                xmax = bucket[0] + 0.03
+                ymin = bucket[1] - 0.13
+                ymax = bucket[1] + 0.13
+                if ((xg >= xmin and xg <= xmax) and (yg >= ymin and yg <= ymax)):
+                    bucket_ind = np.where(self.board_buckets == bucket)[0][0]
+                    checker_locations[bucket_ind][0].append(green)
+        for brown in self.brownpos:
+            for bucket in self.board_buckets:
+                xb = brown[0]
+                yb = brown[1]
+                xmin = bucket[0] - 0.03
+                xmax = bucket[0] + 0.03
+                ymin = bucket[1] - 0.13
+                ymax = bucket[1] + 0.13
+                if ((xb >= xmin and xb <= xmax) and (yb >= ymin and yb <= ymax)):
+                    bucket_ind = np.where(self.board_buckets == bucket)[0][0]
+                    checker_locations[bucket_ind][1].append(brown)
+
+        # Check that we have the right amount of checkers!
+
+        total = 0
+        for i in np.arange(25):
+            greencount = len(checker_locations[i][0])
+            browncount = len(checker_locations[i][1])
+            if (greencount != 0 and browncount !=0) and i != 24:
+                return None # don't update, something is changing or bad data
+            total += greencount + browncount
+        total += self.scored
+        if total != 30:
+            return None # don't update, something is changing
+        else:
+            for i in np.arange(25):
+                greencount = len(checker_locations[i][0])
+                browncount = len(checker_locations[i][1])            
+                self.gamestate[i] = [greencount,browncount]
+            self.checker_locations = checker_locations
+
+    def determine_action(self, msg):
         '''
         given current knowledge of the gameboard + current state, figure out
         what to do next?
@@ -202,9 +286,12 @@ class GameDriver():
         else:
             wait for my turn in the init position
         '''
-        if len(self.task_handler.tasks) != 0:
+        if self.board_buckets is None or self.checker_locations is None:
+            print('no data')
             return
 
+        print('determine action running')
+        
         self.game.set_state(self.gamestate)
         moves = self.handle_turn(self.game)
 
@@ -220,7 +307,8 @@ class GameDriver():
                 self.execute_off_bar(dest)
             elif dest is None:
                 self.execute_bear_off(source)
-            elif np.sign(self.game.state[source]) != np.sign(self.game.state[dest]):
+            elif (np.sign(self.game.state[source]) != np.sign(self.game.state[dest]) and 
+                  self.game.state[dest] != 0):
                 self.execute_hit(source, dest)
             else:
                 self.execute_normal(source, dest)
@@ -231,109 +319,53 @@ class GameDriver():
         turn = 0 if self.game.turn == 1 else 1
         bar = 24
 
-        centers = self.game_board.centers
-        dest_centers = centers[dest]
-        bar_centers = centers[bar]
+        dest_centers = self.grid_centers[dest] # list of coordinates for dest row
 
-        if (self.turn == 1 and self.gamestate[dest][1] > 0 or
-            self.turn == -1 and self.gamestate[dest][0] > 0):
+        num_dest = self.gamestate[dest][turn] # basically next empty for the dest row
 
-            source_pos = dest_centers[0]
-            dest_pos = bar_centers[num_bar if turn else 5 - num_bar]
-            self.move_checker(source_pos, dest_pos)
-
-        num_dest = self.gamestate[dest][turn]
-        num_bar = self.gamestate[bar][turn]
-
-        source_pos = bar_centers[6 - num_bar if turn else num_bar - 1]
+        source_pos = self.last_checker(bar,turn)
         dest_pos = dest_centers[num_dest]
 
-        self.move_checker(source_pos, dest_pos)
+        self.publish_checker_move(source_pos, dest_pos)
 
     def execute_bear_off(self, source):
         turn = 0 if self.game.turn == 1 else 1
-        bar = 24
 
-        centers = self.game_board.centers
-        source_centers = centers[source]
-        bar_centers = centers[bar]
+        source_pos = self.last_checker(source,turn)
+        dest_pos = [0.5,0.3]
 
-        num_source = self.gamestate[source][turn]
-
-        source_pos = source_centers[num_source - 1]
-        dest_pos = bar_centers[0]
-        dest_pos[0] += 0.55
-
-        self.move_checker(source_pos, dest_pos)
+        self.publish_checker_move(source_pos, dest_pos)
     
     def execute_hit(self, source, dest):
         turn = 0 if self.game.turn == 1 else 1
         bar = 24
 
-        if self.game_board.centers is None:
-            return
+        dest_centers = self.grid_centers[dest]
+        bar_centers = self.grid_centers[bar]
 
-        centers = self.game_board.centers
-        source_centers = centers[source]
-        dest_centers = centers[dest]
-        bar_centers = centers[bar]
-
-        num_source = self.gamestate[source][turn]
         num_bar = self.game.bar[0 if self.game.turn == 1 else 1]
 
-        source_pos = dest_centers[0]
-        dest_pos = bar_centers[5 - num_bar if turn else num_bar]
+        source_pos = self.last_checker(dest,turn) # grab solo checker
+        dest_pos = bar_centers[5 - num_bar if turn else num_bar] # and move to bar
 
-        self.move_checker(source_pos, dest_pos)
+        self.publish_checker_move(source_pos, dest_pos) # publish move
 
-        source_pos = source_centers[num_source - 1]
-        dest_pos = dest_centers[0]
+        source_pos = self.last_checker(source,turn) # grab my checker
+        dest_pos = dest_centers[0] # and move where I just removed
 
-        self.move_checker(source_pos, dest_pos)
+        self.publish_checker_move(source_pos, dest_pos)
 
-    def execute_normal(self, source, dest):
-        if self.game_board.centers is None:
-            return
-        
+    def execute_normal(self, source, dest):        
         turn = 0 if self.game.turn == 1 else 1
 
-        centers = self.game_board.centers
-        source_centers = centers[source]
-        dest_centers = centers[dest]
-
-        num_source = self.gamestate[source][turn]
+        dest_centers = self.grid_centers[dest]
+        
         num_dest = self.gamestate[dest][turn]
 
-        source_pos = source_centers[num_source - 1]
+        source_pos = self.last_checker(source,turn)
         dest_pos = dest_centers[num_dest]
 
-        self.move_checker(source_pos, dest_pos)
-
-    def move_checker(self, source_pos, dest_pos):
-        source_pos = np.append(source_pos,[0.05, -np.pi / 2, np.pi / 2 - np.arctan2(source_pos[1], source_pos[0])])
-        dest_pos = np.append(dest_pos, [0.05, -np.pi / 2, np.pi / 2 - np.arctan2(dest_pos[1], dest_pos[0])])
-
-        self.trajectory_node.get_logger().info(f"source pos {source_pos}")
-        self.trajectory_node.get_logger().info(f"dest pos {dest_pos}")
-        
-        self.task_handler.add_state(Tasks.INIT)
-        self.task_handler.add_state(Tasks.TASK_SPLINE,
-                                    x_final = np.array(source_pos), T = 5)
-        self.task_handler.add_state(Tasks.GRIP)
-        self.task_handler.add_state(Tasks.TASK_SPLINE,
-                                    x_final = np.array(dest_pos), T = 5)
-        self.task_handler.add_state(Tasks.GRIP, grip = False)
-        self.task_handler.add_state(Tasks.INIT)
-
-    def pub_buckets(self):
-        bucket_poses = PoseArray()
-        for i in np.arange(25):
-            for j in np.arange(6):
-                p = pxyz(self.game_board.centers[i][j][0], self.game_board.centers[i][j][1], 0)
-                R = Reye()
-                bucket_poses.poses.append(Pose_from_T(T_from_Rp(R,p)))
-        # self.trajectory_node.get_logger().info("Sending bucket poses")
-        self.trajectory_node.test_bucket_pub.publish(bucket_poses)
+        self.publish_checker_move(source_pos, dest_pos)
     
     def choose_move(self, game, moves):
         #print("Legal moves: {}".format(moves))
@@ -347,6 +379,7 @@ class GameDriver():
     def handle_turn(self, game):
         moves = []
         game.roll()
+        final_moves = []
 
         print("Dice: {}".format(game.dice))
 
@@ -355,125 +388,54 @@ class GameDriver():
                 moves = game.possible_moves(game.dice[0])
                 move = self.choose_move(game, moves)
                 if move is not None:
-                    moves.append(move)
+                    final_moves.append(move)
         else:
-            larger = 1
-            if game.dice[0] > game.dice[1]:
-                larger = 0
-            moves = game.possible_moves(larger)
+            # larger = 1
+            # if game.dice[0] > game.dice[1]:
+            #     larger = 0
+            moves = game.possible_moves(game.dice[0])
             move = self.choose_move(game, moves)
             if move is not None:
-                moves.append(move)
-            moves = game.possible_moves(not larger)
+                final_moves.append(move)
+            moves = game.possible_moves(game.dice[1])
             move = self.choose_move(game, moves)
             if move is not None:
-                moves.append(move)
+                final_moves.append(move)
+            print("Moves in handle turn:", final_moves)
 
-        return moves
+        return final_moves
 
-# physical representation of the two halves of the board
-class GameBoard():
-    def __init__(self):
-        # FIXME with "expected" values for the boards
-        self.board_x = 0.0
-        self.board_y = 0.387
-        self.board_t = np.pi/2
-
-        self.tau = 3 # FIXME
-        self.alpha = 1 - 1/self.tau
-
-        self.L = 1.06 # board length
-        self.H = 0.536 # board width
-        self.dL = 0.066 # triangle to triangle dist
-        self.dH = 0.040 # checker to checker stack dist
-
-        self.dL0 = 0.247 # gap from blue side to first triangle center
-        self.dL1 = 0.117 - self.dL # gap between two sections of triangles (minus dL)
-
-        self.centers = None
-
-    def set_grid_centers(self):
+    def last_checker(self,row,color):
         '''
-        return 25 centers with 6 subdivisions each for bucketing given
-        current belief of the board pose
-
-        in: self (need board positional info)
-
-        returns: center coordinates of 25*6 = 150 grid spaces that a checker
-        could occupy.
-
-        based only on geometry of board, basically need to measure this out
-        FIXME Test this!!
+        Get the [x,y] of the last checker in the row (closest to middle)
         '''
-        centers = np.zeros((25,6,2))
-        for i in np.arange(6):
-            for j in np.arange(6):
-                x = self.board_x + self.L/2 - self.dL0 - i*self.dL
-                y = self.board_y + self.H/2 - self.dH/2 - j*self.dH
-                centers[i][j] = [x,y]
-
-        for i in np.arange(6,12):
-            for j in np.arange(6):
-                x = self.board_x + self.L/2 - self.dL0 - self.dL1 - i*self.dL
-                y = self.board_y + self.H/2 - self.dH/2 - j*self.dH
-                centers[i][j] = [x,y]
-
-        for i in np.arange(12,18):
-            for j in np.arange(6):
-                x = self.board_x + self.L/2 - self.dL0 - self.dL1 - (23-i)*self.dL
-                y = self.board_y - self.H/2 + self.dH/2 + j*self.dH
-                centers[i][j] = [x,y]
-
-        for i in np.arange(18,24):
-            for j in np.arange(6):
-                x = self.board_x + self.L/2 - self.dL0 - (23-i)*self.dL
-                y = self.board_y - self.H/2 + self.dH/2 + j*self.dH
-                centers[i][j] = [x,y]
-
-        for j in np.arange(6):
-            x = self.board_x + self.L/2 - self.dL0 - 5*self.dL - (self.dL1+self.dL)/2
-            y = self.board_y + 2.5*self.dH - j*self.dH
-            centers[24][j] = [x,y]
+        positions = self.checker_locations[row][color]
+        mindist = np.inf
+        min_index = None
+        i = 0
+        for position in positions:
+            dist = np.sqrt((position[0]-self.board_x)**2 + (position[1]-self.board_y)**2)
+            if dist < mindist:
+                mindist = dist
+                min_index = i
+            i += 1
+        return self.checker_locations[row][color][min_index]
         
-        # planar rotate by theta - np.pi/2
-        rotated_centers = np.zeros((25,6,2))
-        theta = self.board_t
-        for i in np.arange(25):
-            for j in np.arange(6):
-                x = centers[i][j][0]*np.cos(theta) - centers[i][j][1]*np.sin(theta)
-                y = centers[i][j][0]*np.sin(theta) + centers[i][j][1]*np.cos(theta)
-                rotated_centers[i][j] = [x,y]
-        '''        
-        # uncomment for plotting centers
-        
-        flattened_centers = rotated_centers.reshape(-1, 2)
+    def publish_checker_move(self, source, dest):
+        msg = PoseArray()
+        for xy in [source, dest]:
+            p = pxyz(xy[0],xy[1],0.01)
+            R = Reye()
+            msg.poses.append(Pose_from_T(T_from_Rp(R,p)))
+        self.pub_checker_move.publish(msg)
 
-        # Extract x and y coordinates
-        x_coords = flattened_centers[:, 0]
-        y_coords = flattened_centers[:, 1]
+    def publish_dice_roll(self,source,dest):
+        pass
 
-        # Plot the points
-        plt.figure(figsize=(8, 6))
-        plt.scatter(x_coords, y_coords, color='blue')
-        plt.xlabel('X')
-        plt.ylabel('Y')
-        plt.title('Grid Centers')
-        plt.grid(True)
-        plt.show()'''
-                                 
-        self.centers = rotated_centers
-
-    def filtered_board_update(self, measurement:Pose):
-        self.board_x = self.filtered_update(self.board_x, measurement.position.x)
-        self.board_y = self.filtered_update(self.board_y, measurement.position.y)
-        R = R_from_T(T_from_Pose(measurement))
-        t = np.arctan2(R[1,0],R[0,0]) # undo rotz
-        self.board_t = self.filtered_update(self.board_t, t)
-        self.set_grid_centers()
-
-    def filtered_update(self, value, newvalue):
-        value = (1 - self.alpha) * value + self.alpha * newvalue
-        return value
+    def publish_clear(self):
+        msg = Bool()
+        msg.data = True
+        self.pub_clear.publish(msg)
 
 POINT_LIM = 6
 
@@ -495,7 +457,7 @@ class Game:
                 self.state.append(point[0])
             else:
                 self.state.append(-point[1])
-        self.state = np.append(self.state[11::-1], self.state[:11:-1]).tolist()
+        #self.state = np.append(self.state[11::], self.state[:11:]).tolist()
 
     def roll(self):
         self.dice = np.random.randint(1, 7, size = 2).tolist()
@@ -585,13 +547,13 @@ class Game:
 
         # Normal moves
         if not moves:
-            #print("Inside normal moves")
+            print("Inside normal moves")
             for point1 in range(24):
                 for point2 in range(24):
                     if self.is_valid(point1, point2, die):
-                        #print("Inside valid")
-                        #print("Source point: ",point1)
-                        #print("Destination point: ", point2)
+                        print("Inside valid")
+                        print("Source point: ",point1)
+                        print("Destination point: ", point2)
                         moves.append((point1, point2))
 
         # Move off board (again)

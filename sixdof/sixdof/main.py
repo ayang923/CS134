@@ -13,6 +13,8 @@ from sixdof.TransformHelpers import *
 from sixdof.states import Tasks, TaskHandler
 from sixdof.nodes import TrajectoryNode, DetectorNode
 
+from sixdof.game import GameNode
+
 from enum import Enum
 
 def main(args=None):
@@ -21,11 +23,13 @@ def main(args=None):
 
     # Instantiate the Trajectory node.
     traj_node = TrajectoryNode('traj')
-    detect_node = DetectorNode("detect")
+    detect_node = DetectorNode('detect')
+    game_node = GameNode('game')
 
     executor = rclpy.executors.MultiThreadedExecutor()
     executor.add_node(traj_node)
     executor.add_node(detect_node)
+    executor.add_node(game_node)
     
     # Spin the node until interrupted.
     executor.spin()
@@ -34,6 +38,7 @@ def main(args=None):
     rclpy.shutdown()
     traj_node.destroy_node()
     detect_node.destroy_node()
+    game_node.destroy_node()
     executor.shutdown()
 
 if __name__ == "__main__":
