@@ -236,6 +236,7 @@ class TaskHandler():
     def move_checker(self, source_pos, dest_pos):
         #anglestring = 'angle' + str((np.pi/2 - np.arctan2(source_pos[1], source_pos[0])) % np.pi/2)
         #self.node.get_logger().info(anglestring)
+        
         source_pos = np.append(source_pos,[0.005, -np.pi / 2, float((np.pi/2 - np.arctan2(source_pos[1], source_pos[0])) % np.pi/2)])
         dest_pos = np.append(dest_pos, [0.005, -np.pi / 2, float((np.pi/2 - np.arctan2(dest_pos[1], dest_pos[0])) % np.pi/2)])
 

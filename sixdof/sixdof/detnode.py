@@ -66,8 +66,8 @@ class DetectorNode(Node):
 
         self.rgb = None
 
-        self.x0 = 0.0
-        self.y0 = 0.387
+        self.x0 = 0.0145
+        self.y0 = 0.3775
 
         self.best_board_xy = (None,[1.06,0.535],0)
         self.board_buckets = None # nparray of bucket centers
