@@ -27,7 +27,7 @@ setup(
         'console_scripts': [
             'det             = sixdof.detnode:main',
             'traj            = sixdof.trajnode:main',
-            'game            = sixdof.game:main',
+            'game            = sixdof.gamenode:main',
         ],
     },
 )

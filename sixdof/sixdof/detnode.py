@@ -10,7 +10,7 @@ from std_msgs.msg       import UInt8MultiArray
 
 from sixdof.utils.TransformHelpers import *
 
-from sixdof.game import Color
+from sixdof.gamenode import Color
 
 GREEN_CHECKER_LIMITS = np.array(([30, 70], [25, 80], [30, 90]))
 BROWN_CHECKER_LIMITS = np.array(([100, 150], [20, 75], [90, 160]))
@@ -63,8 +63,9 @@ class DetectorNode(Node):
 
         self.rgb = None
 
-        self.x0 = 0.0145
-        self.y0 = 0.3775
+        # x,y of aruco tag rectangle's center
+        self.x0 = 0.77875
+        self.y0 = 0.3685
 
         self.best_board_xy = (None,[1.06,0.535],0)
         self.board_buckets = None # nparray of bucket centers
@@ -166,7 +167,7 @@ class DetectorNode(Node):
             try: 
                 bound = cv2.minAreaRect(contour_xy)
             except:
-                print('convexhull error')
+                #print('convexhull error')
                 return None
 
             # filter
@@ -266,8 +267,6 @@ class DetectorNode(Node):
         ###################################################################
         
     def update_centers(self):
-        # Cannot seem to get this to draw correctly, no idea where the scaling
-        # is coming into play. Is self.Minv wrong?
         if self.best_board_xy[0] is None: # make sure we have detected the board
             return None
         
@@ -397,39 +396,45 @@ class DetectorNode(Node):
         for row in self.board_buckets:              
             x = row[0]
             y = row[1]
-            uv = xyToUV(self.Minv,x,y)
-            if uv is not None:
-                [u, v] = uv
-                centeruv = np.array([float(u),float(v)])
-                rect_points = cv2.boxPoints(((centeruv[0],centeruv[1]), (W, L), theta))
-                rect_points = np.int0(rect_points)
-                cv2.polylines(self.rgb, [rect_points], isClosed=True, color=(255, 50, 50), thickness=2)
-                # Writing the number of elements in the buckets with color identification
-                checker_nums = self.check_bucket(row)
-                font = cv2.FONT_HERSHEY_SIMPLEX 
-                xg = x - 0.03
-                xb = x 
-                if np.where(self.board_buckets == row)[0][0] < 12:
-                    ygb = y + 0.13
-                    uvg = xyToUV(self.Minv,xg,ygb)
-                    uvb = xyToUV(self.Minv,xb,ygb)
-                    centergreen = tuple(np.int0(np.array([float(uvg[0]),float(uvg[1])])))
-                    centerbrown = tuple(np.int0(np.array([float(uvb[0]),float(uvb[1])])))
-                elif np.where(self.board_buckets == row)[0][0] < 24:
-                    ygb = y - 0.13
-                    uvg = xyToUV(self.Minv,xg,ygb)
-                    uvb = xyToUV(self.Minv,xb,ygb)
-                    centergreen = tuple(np.int0(np.array([float(uvg[0]),float(uvg[1])])))
-                    centerbrown = tuple(np.int0(np.array([float(uvb[0]),float(uvb[1])])))
-                else:
-                    ygb = y
-                    uvg = xyToUV(self.Minv,xg,ygb)
-                    uvb = xyToUV(self.Minv,xb,ygb)
-                    centergreen = tuple(np.int0(np.array([float(uvg[0]),float(uvg[1])])))
-                    centerbrown = tuple(np.int0(np.array([float(uvb[0]),float(uvb[1])])))
-                    
-                cv2.putText(self.rgb, str(checker_nums[0]),centergreen, font, fontScale=1,color=(0, 255, 0),thickness=2)
-                cv2.putText(self.rgb, str(checker_nums[1]),centerbrown, font, fontScale=1,color=(0, 0, 255),thickness=2)
+            # same min/max used for grouping checkers into buckets
+            xmin = x - 0.03
+            xmax = x + 0.03
+            ymin = y - 0.13
+            ymax = y + 0.13
+            uvtopleft = xyToUV(self.Minv,xmin,ymax)
+            uvbottomright = xyToUV(self.Minv,xmax,ymin)
+            #uv = xyToUV(self.Minv,x,y)
+            [uTL, vTL] = uvtopleft
+            [uBR, vBR] = uvbottomright
+            topleft = np.int0(np.array([uTL,vTL]))
+            bottomright = np.int0(np.array([uBR,vBR]))
+            cv2.rectangle(self.rgb, topleft, bottomright, color=(255,50,50),thickness=2)
+            # Writing the number of elements in the buckets with color identification
+            checker_nums = self.check_bucket(row)
+            font = cv2.FONT_HERSHEY_SIMPLEX 
+            xg = x - 0.03
+            xb = x 
+            if np.where(self.board_buckets == row)[0][0] < 12:
+                ygb = y + 0.13
+                uvg = xyToUV(self.Minv,xg,ygb)
+                uvb = xyToUV(self.Minv,xb,ygb)
+                centergreen = tuple(np.int0(np.array([float(uvg[0]),float(uvg[1])])))
+                centerbrown = tuple(np.int0(np.array([float(uvb[0]),float(uvb[1])])))
+            elif np.where(self.board_buckets == row)[0][0] < 24:
+                ygb = y - 0.13
+                uvg = xyToUV(self.Minv,xg,ygb)
+                uvb = xyToUV(self.Minv,xb,ygb)
+                centergreen = tuple(np.int0(np.array([float(uvg[0]),float(uvg[1])])))
+                centerbrown = tuple(np.int0(np.array([float(uvb[0]),float(uvb[1])])))
+            else:
+                ygb = y
+                uvg = xyToUV(self.Minv,xg,ygb)
+                uvb = xyToUV(self.Minv,xb,ygb)
+                centergreen = tuple(np.int0(np.array([float(uvg[0]),float(uvg[1])])))
+                centerbrown = tuple(np.int0(np.array([float(uvb[0]),float(uvb[1])])))
+                
+            cv2.putText(self.rgb, str(checker_nums[0]),centergreen, font, fontScale=1,color=(0, 255, 0),thickness=2)
+            cv2.putText(self.rgb, str(checker_nums[1]),centerbrown, font, fontScale=1,color=(0, 0, 255),thickness=2)
                 
     def check_bucket(self, bucket):
         bucket_ind = np.where(self.board_buckets == bucket)[0][0]
@@ -498,8 +503,8 @@ class DetectorNode(Node):
             uvMarkers[markerIds[i]-1,:] = np.mean(markerCorners[i], axis=1)
 
         # Calculate the matching World coordinates of the 4 Aruco markers.
-        DX = 1.184 # horizontal center-center of table aruco markers
-        DY = 0.4985 # vertical center-center of table aruco markers
+        DX = 1.1935 # horizontal center-center of table aruco markers
+        DY = 0.579 # vertical center-center of table aruco markers
         xyMarkers = np.float32([[self.x0+dx/2, self.y0+dy/2] for (dx, dy) in
                                 [(-DX, DY), (DX, DY), (-DX, -DY), (DX, -DY)]])
 
@@ -525,8 +530,8 @@ class DetectorNode(Node):
             uvMarkers[markerIds[i]-1,:] = np.mean(markerCorners[i], axis=1)
 
         # Calculate the matching World coordinates of the 4 Aruco markers.
-        DX = 1.184 # horizontal center-center of table aruco markers
-        DY = 0.4985 # vertical center-center of table aruco markers
+        DX = 1.1935 # horizontal center-center of table aruco markers
+        DY = 0.579 # vertical center-center of table aruco markers
         xyMarkers = np.float32([[self.x0+dx/2, self.y0+dy/2] for (dx, dy) in
                                 [(-DX, DY), (DX, DY), (-DX, -DY), (DX, -DY)]])
 

@@ -17,7 +17,7 @@
   <joint name="placement" type="fixed">
     <parent link="world"/>
     <child  link="baseplate"/>
-    <origin xyz="0.0 0.0 0.0" rpy="0 0 3.1415"/>			<!-- WHERE IS THE BASE -->
+    <origin xyz="0.7745 0.0394 0.0" rpy="0 0 3.1415"/>			<!-- WHERE IS THE BASE -->
   </joint>
 
   <!-- BASE PLATE: Shift across the base plate to the base motor. --> 
@@ -34,7 +34,7 @@
   <joint name="baseplate" type="fixed">
     <parent link="baseplate"/>
     <child  link="basemotor"/>
-    <origin xyz="0 0 0.0125" rpy="0 0 -1.5708"/>
+    <origin xyz="0 0 0.0124" rpy="0 0 -1.5708"/>
   </joint>
 
   <!-- BASE MOTOR: Thickness: X5 = 31.1mm, X8 = 45.1mm -->

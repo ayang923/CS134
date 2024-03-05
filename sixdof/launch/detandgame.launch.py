@@ -137,7 +137,9 @@ def generate_launch_description():
     return LaunchDescription([
         # Start the state publisher, rviz, hebi and demo nodes.
         node_robot_state_publisher_ACTUAL,
+        node_usbcam_top,
+        node_usbcam_wrist,
         node_hebi,
-        node_traj,
-        node_rviz,
+        node_det,
+        node_game,
     ])

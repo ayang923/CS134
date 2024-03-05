@@ -236,22 +236,46 @@ class TaskHandler():
     def move_checker(self, source_pos, dest_pos):
         #anglestring = 'angle' + str((np.pi/2 - np.arctan2(source_pos[1], source_pos[0])) % np.pi/2)
         #self.node.get_logger().info(anglestring)
+        robotx = 0.7745
+        roboty = 0.0394
         
-        source_pos = np.append(source_pos,[0.005, -np.pi / 2, float((np.pi/2 - np.arctan2(source_pos[1], source_pos[0])) % np.pi/2)])
-        dest_pos = np.append(dest_pos, [0.005, -np.pi / 2, float((np.pi/2 - np.arctan2(dest_pos[1], dest_pos[0])) % np.pi/2)])
+        # FIXME Known Issue: ensuring the wrist is always parallel to
+        # the long axis of the table for picking/placing is not working!
+        # The last item appended to source pos and dest pos below
 
-        self.node.get_logger().info(f"source pos {source_pos}")
-        self.node.get_logger().info(f"dest pos {dest_pos}")
-        
-        if source_pos[0] < -0.1:
+        source_pos = np.append(source_pos,[0.005, -np.pi / 2, float(np.arctan2(-(source_pos[0]-robotx), source_pos[1]-roboty))])
+        dest_pos = np.append(dest_pos, [0.035, -np.pi / 2, float(np.arctan2(-(source_pos[0]-robotx), source_pos[1]-roboty))])
+
+        source_angle = 'computed wrist roll angle: ' + str(float(np.arctan2(-(source_pos[0]-robotx), source_pos[1]-roboty)))
+        self.node.get_logger().info(source_angle)
+
+        #self.node.get_logger().info(f"source pos {source_pos}")
+        #self.node.get_logger().info(f"dest pos {dest_pos}")
+
+        if source_pos[0] - robotx < -0.1:
+            source_left = True
+        else:
+            source_left = False
+        if dest_pos[0] - robotx < -0.1:
+            dest_left = True
+        else:
+            dest_left = False   
+
+        # TODO: add vertical motion spline as final piece
+
+        if source_left:
             self.add_state(Tasks.JOINT_SPLINE, side=0, T = 5)
         else:
             self.add_state(Tasks.JOINT_SPLINE, side=1, T = 5)
         self.add_state(Tasks.TASK_SPLINE,x_final = np.array(source_pos), T = 5)
         self.add_state(Tasks.GRIP)
-        if dest_pos[0] < -0.1:
+        if source_left:
             self.add_state(Tasks.JOINT_SPLINE, side=0, T = 5)
         else:
+            self.add_state(Tasks.JOINT_SPLINE, side=1, T = 5)
+        if dest_left and not source_left:
+            self.add_state(Tasks.JOINT_SPLINE, side=0, T = 5)
+        elif not dest_left and source_left:
             self.add_state(Tasks.JOINT_SPLINE, side=1, T = 5)
         self.add_state(Tasks.TASK_SPLINE,x_final = np.array(dest_pos), T = 5)
         self.add_state(Tasks.GRIP, grip = False)

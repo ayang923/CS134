@@ -52,7 +52,7 @@ class TrajectoryNode(Node):
         self.task_handler = TaskHandler(self, np.array(self.position0).reshape(-1, 1))
 
         self.task_handler.add_state(Tasks.INIT)
-        self.test([0.3,0.5], [-0.3,0.5])
+        #self.test([0.3,0.5], [-0.3,0.5])
 
         self.waiting_for_move = False
         self.moveready_pub = self.create_publisher(Bool, '/move_ready', 1)
@@ -84,7 +84,7 @@ class TrajectoryNode(Node):
                 for pose in msg.poses:
                     p = p_from_T(T_from_Pose(pose))
                     action.append([p[0],p[1]])              
-                self.task_handler.move_checker(action[0],action[1])
+                self.task_handler.move_checker(action[0],action[1]) # (source, dest)
             else:
                 pass
         self.waiting_for_move = False

@@ -217,11 +217,13 @@ class GameNode(Node):
                              [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
                              [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
                              [[],[]]]
+        unsorted = [[],[]]
         
         if self.greenpos is None or self.brownpos is None or self.board_buckets is None:
             return
 
         for green in self.greenpos:
+            sorted = False
             for bucket in self.board_buckets:
                 xg = green[0]
                 yg = green[1]
@@ -229,10 +231,15 @@ class GameNode(Node):
                 xmax = bucket[0] + 0.03
                 ymin = bucket[1] - 0.13
                 ymax = bucket[1] + 0.13
+                bucket_ind = np.where(self.board_buckets == bucket)[0][0]
                 if ((xg >= xmin and xg <= xmax) and (yg >= ymin and yg <= ymax)):
-                    bucket_ind = np.where(self.board_buckets == bucket)[0][0]
                     checker_locations[bucket_ind][0].append(green)
+                    sorted = True
+            if sorted == False:
+                unsorted[0].append(green)
+
         for brown in self.brownpos:
+            sorted = False
             for bucket in self.board_buckets:
                 xb = brown[0]
                 yb = brown[1]
@@ -240,9 +247,12 @@ class GameNode(Node):
                 xmax = bucket[0] + 0.03
                 ymin = bucket[1] - 0.13
                 ymax = bucket[1] + 0.13
+                bucket_ind = np.where(self.board_buckets == bucket)[0][0]
                 if ((xb >= xmin and xb <= xmax) and (yb >= ymin and yb <= ymax)):
-                    bucket_ind = np.where(self.board_buckets == bucket)[0][0]
                     checker_locations[bucket_ind][1].append(brown)
+                    sorted = True
+            if sorted == False:
+                unsorted[1].append(brown)
 
         # Check that we have the right amount of checkers!
 
@@ -251,16 +261,20 @@ class GameNode(Node):
             greencount = len(checker_locations[i][0])
             browncount = len(checker_locations[i][1])
             if (greencount != 0 and browncount !=0) and i != 24:
-                return None # don't update, something is changing or bad data
+                return None # TODO: instead, raise a flag to be seen on the next "determine action"
             total += greencount + browncount
         total += self.scored
         if total != 30:
-            return None # don't update, something is changing
+            if total + len(unsorted[0]) + len(unsorted[1]) == 30:
+                pass # TODO Raise a flag that a checker is "out of place!"
+            else:
+                return None # don't update, something is changing/blocked
         else:
             for i in np.arange(25):
                 greencount = len(checker_locations[i][0])
                 browncount = len(checker_locations[i][1])            
-                self.gamestate[i] = [greencount,browncount]
+                self.gamestate[i] = [greencount,browncount] # this will only be updated if none of the above flags were raised.
+                # if a flag was raised, we must have the last gamestate stored.
             self.checker_locations = checker_locations
 
     def determine_action(self, msg):
@@ -288,19 +302,37 @@ class GameNode(Node):
             self.get_logger().info('no data')
             return
 
-        self.get_logger().info('determine action running')
+        #self.get_logger().info('determine action running')
         
         self.game.set_state(self.gamestate)
         moves = self.handle_turn(self.game)
+        if self.game.turn == 1:
+            self.get_logger().info("Green Turn!")
+        else:
+            self.get_logger().info("Purple Turn!")
+        #print("Camera game state: {}".format(self.gamestate))
+        #print("Engine game state: {}".format(self.game.state))
+        self.get_logger().info("Dice roll: {}".format(self.game.dice))
+        #print("Number of moves: {}".format(len(moves)))
+        self.get_logger().info("Chosen Moves: {}".format(moves))
 
-        print("Camera game state: {}".format(self.gamestate))
-        print("Engine game state: {}".format(self.game.state))
-        print("Dice roll: {}".format(self.game.dice))
-        print("Number of moves: {}".format(len(moves)))
-        print("Moves: {}".format(moves), flush = True)
+        # FIXME: Need to begin adding recovery logic: can have a number of checks
+        # each time it is "our turn" (ie determine_action is queried):
+        # TODO 1. If self.game.state does not match self.gamestate, fix the "failed
+        # action". See sort_checkers()
+        # TODO 2. If any checkers are too far away from the end of their stack, move them closer.
+        # Similarly, if any checkers are outside of the "legal zones", return them to
+        # their last known positions. See sort_checkers()
+        # TODO 3. If, after a human turn, the board does not match a legal gamestate,
+        # return checkers to their previous positions and make the human play again.
+
+        # FIXME: Known issue: if two moves to/from the same row are chosen,
+        # it sends repeat actions. Basically, it will choose the same checker as
+        # the one it just moved for the source, or the same spot as it just placed
+        # on as the destination
 
         for (source, dest) in moves:
-            print("Moving from {} to {}".format(source, dest))
+            #print("Moving from {} to {}".format(source, dest))
             if source is None:
                 self.execute_off_bar(dest)
             elif dest is None:
@@ -311,7 +343,7 @@ class GameNode(Node):
             else:
                 self.execute_normal(source, dest)
             self.game.move(source, dest)
-            self.get_logger().info("exectued the move")
+            #self.get_logger().info("exectued the move")
         self.game.turn *= -1
     
     def execute_off_bar(self, dest):
@@ -380,8 +412,6 @@ class GameNode(Node):
         game.roll()
         final_moves = []
 
-        print("Dice: {}".format(game.dice))
-
         if game.dice[0] == game.dice[1]:
             for _ in range(4):
                 moves = game.possible_moves(game.dice[0])
@@ -400,7 +430,7 @@ class GameNode(Node):
             move = self.choose_move(game, moves)
             if move is not None:
                 final_moves.append(move)
-            print("Moves in handle turn:", final_moves)
+            #print("Moves in handle turn:", final_moves)
 
         return final_moves
 
@@ -409,15 +439,16 @@ class GameNode(Node):
         Get the [x,y] of the last checker in the row (closest to middle)
         '''
         positions = self.checker_locations[row][color]
-        mindist = np.inf
+        lowest = np.inf
         min_index = None
         i = 0
         for position in positions:
-            dist = np.sqrt((position[0]-self.board_x)**2 + (position[1]-self.board_y)**2)
-            if dist < mindist:
-                mindist = dist
+            if abs(position[1]-self.board_y) < lowest:
+                lowest = abs(position[1]-self.board_y)
                 min_index = i
             i += 1
+        logstring = f'Last checker for row {row}: {self.checker_locations[row][color][min_index]}'
+        self.get_logger().info(logstring)
         return self.checker_locations[row][color][min_index]
         
     def publish_checker_move(self, source, dest):
@@ -550,13 +581,13 @@ class Game:
 
         # Normal moves
         if not moves:
-            print("Inside normal moves")
+            #print("Inside normal moves")
             for point1 in range(24):
                 for point2 in range(24):
                     if self.is_valid(point1, point2, die):
-                        print("Inside valid")
-                        print("Source point: ",point1)
-                        print("Destination point: ", point2)
+                        #print("Inside valid")
+                        #print("Source point: ",point1)
+                        #print("Destination point: ", point2)
                         moves.append((point1, point2))
 
         # Move off board (again)
