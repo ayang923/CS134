@@ -146,8 +146,8 @@ class DetectorNode(Node):
         binary_board = cv2.dilate(binary_board, None, iterations=12)
         binary_board = cv2.erode(binary_board, None, iterations=7)
 
-        cv2.imshow('board', binary_board)
-        cv2.waitKey(1)
+        #cv2.imshow('board', binary_board)
+        #cv2.waitKey(1)
 
         contours_board, _ = cv2.findContours(binary_board, cv2.RETR_EXTERNAL,
                                              cv2.CHAIN_APPROX_SIMPLE)
@@ -303,7 +303,7 @@ class DetectorNode(Node):
         dL = 0.067 # triangle to triangle dist
         dH = 0.040 # checker to checker stack dist
 
-        dL0 = 0.247 # gap from blue side to first triangle center
+        dL0 = 0.235 # gap from blue side to first triangle center
         dL1 = 0.117 - dL # gap between two sections of triangles (minus dL)
 
         for i in np.arange(6):

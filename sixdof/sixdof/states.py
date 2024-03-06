@@ -13,7 +13,7 @@ J_EULER = np.array([[0, 1, -1, 1, 0],[0, 0, 0, 0, 1]]).reshape(2,5) # xdot4 = qd
 RIGHT_SIDE_JOINT_ANGLES = np.array([])
 LEFT_SIDE_JOINT_ANGLES = np.array([])
 
-GRIP_OPEN = -0.3
+GRIP_OPEN = -0.2
 GRIP_DIE = -0.6
 GRIP_CHECKER = -0.6
 GRIP_CUP = -0.45
@@ -134,16 +134,23 @@ class TaskSplineTask(TaskObject):
         return np.vstack((q,self.q0[5])), np.vstack((qdot,np.zeros((1,1))))
     
 class JointSplineTask(TaskObject):
-    def __init__(self, start_time, task_manager, side, T=3.0):
+    def __init__(self, start_time, task_manager, x_final, T=3.0):
         super().__init__(start_time, task_manager)
         self.T = T
 
-        # if side == 0: # left
-        #     self.qdest = np.array([0.91, -0.11, 2, -2.34, np.pi/4, self.q0[5,0]]).reshape(-1,1)
-        # else: # right
-        #     self.qdest = np.array([-0.12, -0.11, 2, -2.34, -0.13, self.q0[5,0]]).reshape(-1,1)
+        # Newton Raphson iteration to determine joint states
+        qf = np.array([0, -0.2, 1.88, -2.25, 0]).reshape(-1, 1) # initial guess basically right in the middle of the workspace
+        while True:
+            (p, _, Jv, _) = self.task_manager.chain.fkin(qf)
+            e = ep(x_final, np.vstack((p, alpha(qf),beta(qf))))
+            if np.linalg.norm(e) <= 1e-12:
+                break
+            J = np.vstack((Jv, J_EULER))
+            qf = qf + np.linalg.solve(J, e)
 
-        self.qdest = side
+        self.qdest = qf
+        self.task_manager.node.get_logger().info('previous (current) joint angles' + str(self.q0[:5]))
+        self.task_manager.node.get_logger().info('computed destination joint angles: ' + str(qf))
     
     def evaluate(self, t, dt):
         t = t - self.start_time - dt
@@ -209,6 +216,8 @@ class TaskHandler():
         elif (self.curr_task_object is None or self.curr_task_object.done) and len(self.tasks) != 0:
             new_task_type, new_task_data = self.tasks.pop(0)
             self.set_state(new_task_type, t, **new_task_data)
+        #elif (self.curr_task_type is not Tasks.INIT and len(self.tasks) == 0 and self.curr_task_object.done):
+        #    self.add_state(Tasks.INIT)
         
         # updates q and p
         self.q, qdot = self.curr_task_object.evaluate(t, dt)
@@ -252,47 +261,33 @@ class TaskHandler():
         # FIXME Known Issue: ensuring the wrist is always parallel to
         # the long axis of the table for picking/placing is not working!
         # The last item appended to source pos and dest pos below
-        source_pos_xyz = np.vstack((source_pos + np.array([0.01, 0]).reshape(-1, 1), np.array([[0.00005]])))
-        source_pos_angles = np.array([-np.pi / 2, float(np.arctan2(-(source_pos[0]-robotx), source_pos[1]-roboty))]).reshape(-1, 1)
+        source_pos_xyz = np.vstack((source_pos + np.array([0.005, 0]).reshape(-1, 1), np.array([[0.00005]])))
+        source_pos_angles = np.array([-np.pi / 2, 0.2+float(np.arctan2(-(source_pos[0]-robotx), source_pos[1]-roboty))]).reshape(-1, 1)
         source_pos = np.vstack((source_pos_xyz, source_pos_angles))
+        above_source_pos = source_pos+np.array([0, 0, 0.08, 0, 0]).reshape(-1, 1)
 
         dest_pos_xyz = np.vstack((dest_pos, np.array([[0.035]])))
-        dest_pos_angles = np.array([-np.pi / 2, float(np.arctan2(-(dest_pos[0]-robotx), dest_pos[1]-roboty))]).reshape(-1, 1)
+        dest_pos_angles = np.array([-np.pi / 2, 0.2+float(np.arctan2(-(dest_pos[0]-robotx), dest_pos[1]-roboty))]).reshape(-1, 1)
         dest_pos = np.vstack((dest_pos_xyz, dest_pos_angles))
         
         self.node.get_logger().info("given source: " + str(source_pos))
         self.node.get_logger().info("given dest: " + str(dest_pos))
 
-        # Newton Raphson Algorithm for Joint Spline
-        q_pos_source = np.array([0, -0.2, 1.88, -2.25, 0]).reshape(-1, 1)
-        while True:
-            (p, _, Jv, _) = self.chain.fkin(q_pos_source)
-            e = ep(source_pos, np.vstack((p, alpha(q_pos_source),beta(q_pos_source))))
-            if np.linalg.norm(e) <= 1e-14:
-                break
-            J = np.vstack((Jv, J_EULER))
-
-            q_pos_source = q_pos_source + np.linalg.solve(J, e)
-
-        q_pos_dest = np.array([0, -0.2, 1.88, -2.25, 0]).reshape(-1, 1)
-        while True:
-            (p, _, Jv, _) = self.chain.fkin(q_pos_dest)
-            e = ep(dest_pos, np.vstack((p, alpha(q_pos_dest),beta(q_pos_dest))))
-            if np.linalg.norm(e) <= 1e-14:
-                break
-            J = np.vstack((Jv, J_EULER))
-
-            q_pos_dest = q_pos_dest + np.linalg.solve(J, e)
-
-        self.node.get_logger().info("src joint " + str(q_pos_source))
-        self.node.get_logger().info("dest pos " + str(q_pos_dest))
-
-        self.add_state(Tasks.JOINT_SPLINE, side=q_pos_source, T = 5)
+        # Queue Trajectories
+        # Joint spline to 10cm above pick checker
+        self.add_state(Tasks.JOINT_SPLINE, x_final=above_source_pos, T=5)
+        # Task spline to pick checker
+        self.add_state(Tasks.TASK_SPLINE, x_final=source_pos, T=2)
+        # Grip checker
         self.add_state(Tasks.GRIP, grip=True)
-        self.add_state(Tasks.TASK_SPLINE, x_final=source_pos+np.array([0, 0, 0.1, 0, 0]).reshape(-1, 1), T=2)
-        self.add_state(Tasks.JOINT_SPLINE, side=q_pos_dest, T = 5)
+        # Task spline to pull up from checker
+        self.add_state(Tasks.TASK_SPLINE, x_final=above_source_pos, T=2)
+        # Joint spline to destination
+        self.add_state(Tasks.JOINT_SPLINE, x_final=dest_pos, T=5)
+        # Release checker
         self.add_state(Tasks.GRIP, grip=False)
-        self.add_state(Tasks.INIT)
+        # Back to wait position
+        #self.add_state(Tasks.INIT)
 
 
         #self.node.get_logger().info(f"source pos {source_pos}")

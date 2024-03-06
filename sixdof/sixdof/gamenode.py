@@ -87,7 +87,7 @@ class GameNode(Node):
         
         # Source and destination info
         self.repeat_source = 0
-        self.repeat_destination = 0
+        self.repeat_dest = 0
 
         # Game engine
         self.game = Game(self.gamestate)
@@ -170,7 +170,7 @@ class GameNode(Node):
         dL = 0.067 # triangle to triangle dist
         dH = 0.040 # checker to checker stack dist
 
-        dL0 = 0.247 # gap from blue side to first triangle center
+        dL0 = 0.235 # gap from blue side to first triangle center
         dL1 = 0.117 - dL # gap between two sections of triangles (minus dL)
 
         for i in np.arange(6):
@@ -326,7 +326,7 @@ class GameNode(Node):
             self.pub_checker_move.publish(PoseArray())
             return
 
-        self.get_logger().info('determine action running')
+        #self.get_logger().info('determine action running')
         
         self.game.set_state(self.gamestate)
         moves = self.handle_turn(self.game)
@@ -335,10 +335,10 @@ class GameNode(Node):
             self.get_logger().info("Green Turn!")
         else:
             self.get_logger().info("Purple Turn!")
-        print("Camera game state: {}".format(self.gamestate))
-        print("Engine game state: {}".format(self.game.state))
+        #print("Camera game state: {}".format(self.gamestate))
+        #print("Engine game state: {}".format(self.game.state))
         self.get_logger().info("Dice roll: {}".format(self.game.dice))
-        print("Number of moves: {}".format(len(moves)))
+        #print("Number of moves: {}".format(len(moves)))
         self.get_logger().info("Chosen Moves: {}".format(moves))
 
         # FIXME: Need to begin adding recovery logic: can have a number of checks
@@ -356,12 +356,15 @@ class GameNode(Node):
         # the one it just moved for the source, or the same spot as it just placed
         # on as the destination
 
-        self.get_logger().info("Gamestate:"+str(self.game.state))
+        #self.get_logger().info("Gamestate:"+str(self.game.state))
         sources = []
+        dests = []
         for (source,dest) in moves:
             self.repeat_source = sources.count(source)
+            self.repeat_dest = dests.count(dest)
             sources.append(source)
-            print("Moving from {} to {}".format(source, dest))
+            dests.append(dest)
+            self.get_logger().info("Moving from {} to {}".format(source, dest))
             if source is None:
                 self.execute_off_bar(dest)
             elif dest is None:
@@ -373,7 +376,7 @@ class GameNode(Node):
                 self.execute_normal(source, dest)
                 
             self.game.move(source, dest)
-            self.get_logger().info("Gamestate after move:"+str(self.game.state))
+            #self.get_logger().info("Gamestate after move:"+str(self.game.state))
             #self.get_logger().info("exectued the move")
         self.game.turn *= -1
     
@@ -381,12 +384,8 @@ class GameNode(Node):
         turn = 0 if self.game.turn == 1 else 1
         bar = 24
 
-        dest_centers = self.grid_centers[dest] # list of coordinates for dest row
-
-        num_dest = self.gamestate[dest][turn] # basically next empty for the dest row
-
         source_pos = self.last_checker(bar,turn, self.repeat_source)
-        dest_pos = dest_centers[num_dest]
+        dest_pos = self.next_free_place(dest, turn, self.repeat_dest)
 
         self.publish_checker_move(source_pos, dest_pos)
 
@@ -402,18 +401,15 @@ class GameNode(Node):
         turn = 0 if self.game.turn == 1 else 1
         bar = 24
         
-
         dest_centers = self.grid_centers[dest]
-        bar_centers = self.grid_centers[bar]
 
-        num_bar = self.game.bar[0 if self.game.turn == 1 else 1]
         # there is a problem here with how the new last checkers work 
-        source_pos = self.last_checker(dest,turn, self.repeat_destination) # grab solo checker
-        dest_pos = bar_centers[5 - num_bar if turn else num_bar] # and move to bar
+        source_pos = self.last_checker(dest,turn, repeat=0) # grab solo checker
+        dest_pos = self.next_free_place(bar,turn,repeat=0)
 
         self.publish_checker_move(source_pos, dest_pos) # publish move
 
-        source_pos = self.last_checker(source,turn, self.repeat_source) # grab my checker
+        source_pos = self.last_checker(source,turn,self.repeat_source) # grab my checker
         dest_pos = dest_centers[0] # and move where I just removed
 
         self.publish_checker_move(source_pos, dest_pos)
@@ -421,12 +417,8 @@ class GameNode(Node):
     def execute_normal(self, source, dest):        
         turn = 0 if self.game.turn == 1 else 1
 
-        dest_centers = self.grid_centers[dest]
-        
-        num_dest = self.gamestate[dest][turn]
-
-        source_pos = self.last_checker(source,turn, self.repeat_source)
-        dest_pos = dest_centers[num_dest]
+        source_pos = self.last_checker(source,turn,self.repeat_source)
+        dest_pos = self.next_free_place(dest,turn,self.repeat_dest)
 
         self.publish_checker_move(source_pos, dest_pos)
     
@@ -444,7 +436,7 @@ class GameNode(Node):
         moves = []
         game.roll()
         final_moves = []
-        print(self.game.state)
+        #print(self.game.state)
         if game.dice[0] == game.dice[1]:
             for _ in range(4):
                 moves = game.possible_moves(game.dice[0])
@@ -469,6 +461,13 @@ class GameNode(Node):
 
         return final_moves
 
+    def next_free_place(self,row,color,repeat):
+        # color is 0 or 1 for the turn, ie green 0 brown 1
+        positions = self.grid_centers[row]
+        num_dest = self.gamestate[row][color] + repeat
+        return positions[num_dest]
+
+
     def last_checker(self,row,color,repeat):
         '''
         Get the [x,y] of the last checker in the row (closest to middle)
@@ -478,7 +477,7 @@ class GameNode(Node):
         positions = self.checker_locations[row][color]
         # sortedpos = sorted(self.checker_locations[row][color], key=lambda x: x[1])
         # self.get_logger().info("Positions sorted:"+str(sortedpos))
-        self.get_logger().info("Positions:"+str(positions))
+        #self.get_logger().info("Positions:"+str(positions))
         # lowest = np.inf
         # min_index = None
         # i = 0
@@ -496,8 +495,8 @@ class GameNode(Node):
             sorted_positions = sorted(self.checker_locations[row][color], key=lambda x: x[1])
         else:
             sorted_positions = sorted(self.checker_locations[row][color], key=lambda x: x[1], reverse=True)
-        self.get_logger().info("Repeat:"+str(repeat))
-        self.get_logger().info("Choosen position:" + str(sorted_positions[repeat]))
+        #self.get_logger().info("Repeat:"+str(repeat))
+        #self.get_logger().info("Choosen position:" + str(sorted_positions[repeat]))
         
         return sorted_positions[repeat]
         
