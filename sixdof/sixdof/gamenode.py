@@ -1,3 +1,6 @@
+# TODO: alter game state handling so we can play against the robot, have the
+# robot play as green, need turn indicator handling.
+
 from geometry_msgs.msg  import Pose, PoseArray
 from std_msgs.msg import UInt8MultiArray, Bool
 
@@ -40,6 +43,8 @@ class GameNode(Node):
         self.sub_moveready = self.create_subscription(Bool, '/move_ready',
                                                       self.determine_action, 1)
         
+        self.sub_turn = self.create_subscription(Bool, '/turn', self.save_turn, 10)
+        
         self.determining = False
         
         self.pub_clear = self.create_publisher(Bool, '/clear', 10)
@@ -75,6 +80,14 @@ class GameNode(Node):
         self.brownpos = None
         # self.recvdice populates this with detected [die1_int, die2_int]
         self.dice = np.array([])
+
+        # Flags
+        self.wrong_count = False
+        self.out_of_place = False
+        
+        # Source and destination info
+        self.repeat_source = 0
+        self.repeat_destination = 0
 
         # Game engine
         self.game = Game(self.gamestate)
@@ -130,6 +143,10 @@ class GameNode(Node):
         places values in self.dice
         TODO
         '''
+        pass
+
+    def save_turn(self, msg):
+        self.turn
         pass
 
     def save_board_dims(self, msg:Pose):
@@ -220,6 +237,9 @@ class GameNode(Node):
         unsorted = [[],[]]
         
         if self.greenpos is None or self.brownpos is None or self.board_buckets is None:
+            # self.get_logger().info("green pos " + str(self.greenpos))
+            # self.get_logger().info("brown pos " + str(self.brownpos))
+            # self.get_logger().info("board buckets " + str(self.board_buckets))
             return
 
         for green in self.greenpos:
@@ -261,12 +281,13 @@ class GameNode(Node):
             greencount = len(checker_locations[i][0])
             browncount = len(checker_locations[i][1])
             if (greencount != 0 and browncount !=0) and i != 24:
-                return None # TODO: instead, raise a flag to be seen on the next "determine action"
+                self.wrong_count = True # TODO
+                return None
             total += greencount + browncount
         total += self.scored
         if total != 30:
             if total + len(unsorted[0]) + len(unsorted[1]) == 30:
-                pass # TODO Raise a flag that a checker is "out of place!"
+                self.out_of_place = True # TODO
             else:
                 return None # don't update, something is changing/blocked
         else:
@@ -299,21 +320,25 @@ class GameNode(Node):
             wait for my turn in the init position
         '''
         if self.board_buckets is None or self.checker_locations is None:
+            self.get_logger().info("board buckets "+str(self.board_buckets))
+            self.get_logger().info("checker location "+str(self.checker_locations))
             self.get_logger().info('no data')
+            self.pub_checker_move.publish(PoseArray())
             return
 
-        #self.get_logger().info('determine action running')
+        self.get_logger().info('determine action running')
         
         self.game.set_state(self.gamestate)
         moves = self.handle_turn(self.game)
+        
         if self.game.turn == 1:
             self.get_logger().info("Green Turn!")
         else:
             self.get_logger().info("Purple Turn!")
-        #print("Camera game state: {}".format(self.gamestate))
-        #print("Engine game state: {}".format(self.game.state))
+        print("Camera game state: {}".format(self.gamestate))
+        print("Engine game state: {}".format(self.game.state))
         self.get_logger().info("Dice roll: {}".format(self.game.dice))
-        #print("Number of moves: {}".format(len(moves)))
+        print("Number of moves: {}".format(len(moves)))
         self.get_logger().info("Chosen Moves: {}".format(moves))
 
         # FIXME: Need to begin adding recovery logic: can have a number of checks
@@ -331,8 +356,12 @@ class GameNode(Node):
         # the one it just moved for the source, or the same spot as it just placed
         # on as the destination
 
-        for (source, dest) in moves:
-            #print("Moving from {} to {}".format(source, dest))
+        self.get_logger().info("Gamestate:"+str(self.game.state))
+        sources = []
+        for (source,dest) in moves:
+            self.repeat_source = sources.count(source)
+            sources.append(source)
+            print("Moving from {} to {}".format(source, dest))
             if source is None:
                 self.execute_off_bar(dest)
             elif dest is None:
@@ -342,7 +371,9 @@ class GameNode(Node):
                 self.execute_hit(source, dest)
             else:
                 self.execute_normal(source, dest)
+                
             self.game.move(source, dest)
+            self.get_logger().info("Gamestate after move:"+str(self.game.state))
             #self.get_logger().info("exectued the move")
         self.game.turn *= -1
     
@@ -354,7 +385,7 @@ class GameNode(Node):
 
         num_dest = self.gamestate[dest][turn] # basically next empty for the dest row
 
-        source_pos = self.last_checker(bar,turn)
+        source_pos = self.last_checker(bar,turn, self.repeat_source)
         dest_pos = dest_centers[num_dest]
 
         self.publish_checker_move(source_pos, dest_pos)
@@ -362,7 +393,7 @@ class GameNode(Node):
     def execute_bear_off(self, source):
         turn = 0 if self.game.turn == 1 else 1
 
-        source_pos = self.last_checker(source,turn)
+        source_pos = self.last_checker(source,turn, self.repeat_source)
         dest_pos = [0.5,0.3]
 
         self.publish_checker_move(source_pos, dest_pos)
@@ -370,18 +401,19 @@ class GameNode(Node):
     def execute_hit(self, source, dest):
         turn = 0 if self.game.turn == 1 else 1
         bar = 24
+        
 
         dest_centers = self.grid_centers[dest]
         bar_centers = self.grid_centers[bar]
 
         num_bar = self.game.bar[0 if self.game.turn == 1 else 1]
-
-        source_pos = self.last_checker(dest,turn) # grab solo checker
+        # there is a problem here with how the new last checkers work 
+        source_pos = self.last_checker(dest,turn, self.repeat_destination) # grab solo checker
         dest_pos = bar_centers[5 - num_bar if turn else num_bar] # and move to bar
 
         self.publish_checker_move(source_pos, dest_pos) # publish move
 
-        source_pos = self.last_checker(source,turn) # grab my checker
+        source_pos = self.last_checker(source,turn, self.repeat_source) # grab my checker
         dest_pos = dest_centers[0] # and move where I just removed
 
         self.publish_checker_move(source_pos, dest_pos)
@@ -393,7 +425,7 @@ class GameNode(Node):
         
         num_dest = self.gamestate[dest][turn]
 
-        source_pos = self.last_checker(source,turn)
+        source_pos = self.last_checker(source,turn, self.repeat_source)
         dest_pos = dest_centers[num_dest]
 
         self.publish_checker_move(source_pos, dest_pos)
@@ -408,10 +440,11 @@ class GameNode(Node):
         return None
 
     def handle_turn(self, game):
+        
         moves = []
         game.roll()
         final_moves = []
-
+        print(self.game.state)
         if game.dice[0] == game.dice[1]:
             for _ in range(4):
                 moves = game.possible_moves(game.dice[0])
@@ -426,30 +459,47 @@ class GameNode(Node):
             move = self.choose_move(game, moves)
             if move is not None:
                 final_moves.append(move)
+                
             moves = game.possible_moves(game.dice[1])
             move = self.choose_move(game, moves)
             if move is not None:
                 final_moves.append(move)
+
             #print("Moves in handle turn:", final_moves)
 
         return final_moves
 
-    def last_checker(self,row,color):
+    def last_checker(self,row,color,repeat):
         '''
         Get the [x,y] of the last checker in the row (closest to middle)
+        Repeat shoudl be set to zero if the row is not accessed more then
+        once in one players turn
         '''
         positions = self.checker_locations[row][color]
-        lowest = np.inf
-        min_index = None
-        i = 0
-        for position in positions:
-            if abs(position[1]-self.board_y) < lowest:
-                lowest = abs(position[1]-self.board_y)
-                min_index = i
-            i += 1
-        logstring = f'Last checker for row {row}: {self.checker_locations[row][color][min_index]}'
-        self.get_logger().info(logstring)
-        return self.checker_locations[row][color][min_index]
+        # sortedpos = sorted(self.checker_locations[row][color], key=lambda x: x[1])
+        # self.get_logger().info("Positions sorted:"+str(sortedpos))
+        self.get_logger().info("Positions:"+str(positions))
+        # lowest = np.inf
+        # min_index = None
+        # i = 0
+        # for position in positions:
+        #     if abs(position[1]-self.board_y) < lowest:
+        #         lowest = abs(position[1]-self.board_y)
+        #         min_index = i
+        #     i += 1
+        # self.get_logger().info("Row:"+ str(row))
+        # self.get_logger().info("Color:"+ str(color))
+        # self.get_logger().info("Min_index:"+ str(min_index))
+        # logstring = f'Last checker for row {row}: {self.checker_locations[row][color][min_index]}'
+        # self.get_logger().info(logstring)
+        if row <= 11:
+            sorted_positions = sorted(self.checker_locations[row][color], key=lambda x: x[1])
+        else:
+            sorted_positions = sorted(self.checker_locations[row][color], key=lambda x: x[1], reverse=True)
+        self.get_logger().info("Repeat:"+str(repeat))
+        self.get_logger().info("Choosen position:" + str(sorted_positions[repeat]))
+        
+        return sorted_positions[repeat]
         
     def publish_checker_move(self, source, dest):
         msg = PoseArray()
@@ -581,7 +631,7 @@ class Game:
 
         # Normal moves
         if not moves:
-            #print("Inside normal moves")
+            # print("Inside normal moves")
             for point1 in range(24):
                 for point2 in range(24):
                     if self.is_valid(point1, point2, die):

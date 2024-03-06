@@ -1,3 +1,6 @@
+# TODO: add turn indicator detection
+# TODO: tweak hsv bounds so it can detect in shadows
+
 import numpy as np
 import rclpy
 
@@ -6,7 +9,7 @@ import cv2, cv_bridge
 from rclpy.node         import Node
 from sensor_msgs.msg    import Image
 from geometry_msgs.msg  import Pose, PoseArray
-from std_msgs.msg       import UInt8MultiArray
+from std_msgs.msg       import UInt8MultiArray, Bool
 
 from sixdof.utils.TransformHelpers import *
 
@@ -43,6 +46,8 @@ class DetectorNode(Node):
         self.pub_brown = self.create_publisher(PoseArray, '/brown', 3)
 
         self.pub_dice = self.create_publisher(UInt8MultiArray, '/dice', 3)
+
+        self.pub_turn_indicator = self.create_publisher(Bool, '/turn', 10)
         
         #publishers for debugging images
         self.pub_board_mask = self.create_publisher(Image, 
@@ -141,8 +146,8 @@ class DetectorNode(Node):
         binary_board = cv2.dilate(binary_board, None, iterations=12)
         binary_board = cv2.erode(binary_board, None, iterations=7)
 
-        #cv2.imshow('board', binary_board)
-        #cv2.waitKey(1)
+        cv2.imshow('board', binary_board)
+        cv2.waitKey(1)
 
         contours_board, _ = cv2.findContours(binary_board, cv2.RETR_EXTERNAL,
                                              cv2.CHAIN_APPROX_SIMPLE)
@@ -173,7 +178,8 @@ class DetectorNode(Node):
             # filter
             if (abs(bound[2] - self.best_board_xy[2]) < 25 and # not a bad angle
                 abs(self.best_board_xy[1][0]*self.best_board_xy[1][1] - 
-                    bound[1][0]*bound[1][1]) < 0.05): # not covered -> bad area
+                    bound[1][0]*bound[1][1]) < 0.05 and 
+                    abs(bound[0][0] - self.x0) < 0.4): # not covered -> bad area
                 alpha = 0.1
                 self.best_board_xy = (
                 bound[0] if self.best_board_xy[0] is None else alpha * np.array(bound[0]) + (1 - alpha) * np.array(self.best_board_xy[0]),
@@ -265,7 +271,22 @@ class DetectorNode(Node):
         else:
             self.pub_brown_mask.publish(self.bridge.cv2_to_imgmsg(binary))
         ###################################################################
-        
+
+    def detect_turn_signal(self,frame):
+        # TODO
+        if self.board_mask_uv is None:
+            return None
+
+        blurred = cv2.GaussianBlur(frame, (5, 5), 0)
+        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)  # Cheat: swap red/blue
+
+        limits = self.brown_checker_limits
+
+        binary = cv2.inRange(hsv, limits[:, 0], limits[:, 1])
+        cv2.imshow('turnsignal', binary)
+        cv2.waitKey(1)
+        pass
+
     def update_centers(self):
         if self.best_board_xy[0] is None: # make sure we have detected the board
             return None
@@ -354,7 +375,7 @@ class DetectorNode(Node):
                     self.occupancy[bucket_ind][1] += 1
     
     def draw_best_board(self):
-        if self.best_board_xy is not None and self.best_board_uv is not None:
+        if self.best_board_xy[0] is not None and self.best_board_uv is not None:
             # draw center
             centerxy = np.mean(cv2.boxPoints(self.best_board_xy), axis=0)
             x = centerxy[0]

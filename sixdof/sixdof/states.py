@@ -13,7 +13,7 @@ J_EULER = np.array([[0, 1, -1, 1, 0],[0, 0, 0, 0, 1]]).reshape(2,5) # xdot4 = qd
 RIGHT_SIDE_JOINT_ANGLES = np.array([])
 LEFT_SIDE_JOINT_ANGLES = np.array([])
 
-GRIP_OPEN = -0.15
+GRIP_OPEN = -0.3
 GRIP_DIE = -0.6
 GRIP_CHECKER = -0.6
 GRIP_CUP = -0.45
@@ -57,6 +57,7 @@ class InitTask(TaskObject):
 
         self.SHOULDER_UP = np.array([self.q0[0, 0], 0.75, self.q0[2, 0], self.q0[3,0], self.q0[4,0], self.q0[5,0]]).reshape(-1,1)
         self.ELBOW_UP = np.array([0.0, 0.75, np.pi/2, -3*np.pi/4, 0.0, self.q0[5,0]]).reshape(-1,1)
+
 
         # check what needs to be done
         self.in_shoulder_up = np.linalg.norm(self.SHOULDER_UP - self.q0) < 0.1
@@ -137,15 +138,18 @@ class JointSplineTask(TaskObject):
         super().__init__(start_time, task_manager)
         self.T = T
 
-        if side == 0: # left
-            self.qdest = np.array([0.91, -0.11, 2, -2.34, np.pi/4, self.q0[5,0]]).reshape(-1,1)
-        else: # right
-            self.qdest = np.array([-0.12, -0.11, 2, -2.34, -0.13, self.q0[5,0]]).reshape(-1,1)
+        # if side == 0: # left
+        #     self.qdest = np.array([0.91, -0.11, 2, -2.34, np.pi/4, self.q0[5,0]]).reshape(-1,1)
+        # else: # right
+        #     self.qdest = np.array([-0.12, -0.11, 2, -2.34, -0.13, self.q0[5,0]]).reshape(-1,1)
+
+        self.qdest = side
     
     def evaluate(self, t, dt):
         t = t - self.start_time - dt
         if t < self.T:
-            return goto5(t, self.T, self.q0, self.qdest)
+            q, qdot = goto5(t, self.T, self.q0[:5], self.qdest)
+            return np.vstack((q,self.q0[5])), np.vstack((qdot,np.zeros((1,1))))
         else:
             self.done = True
             return self.task_manager.q, np.zeros((6, 1))
@@ -234,52 +238,97 @@ class TaskHandler():
         self.tasks = [InitTask]
 
     def move_checker(self, source_pos, dest_pos):
+        '''
+        source_pos and dest_pos np.array [x, y]
+        '''
         #anglestring = 'angle' + str((np.pi/2 - np.arctan2(source_pos[1], source_pos[0])) % np.pi/2)
         #self.node.get_logger().info(anglestring)
         robotx = 0.7745
         roboty = 0.0394
         
+        # (p, _, Jv, _) = self.task_manager.chain.fkin(qlast)
+        # e = ep(pdlast, np.vstack((p,alpha(qlast),beta(qlast))))
+        # J = np.vstack((Jv, J_EULER)) 
         # FIXME Known Issue: ensuring the wrist is always parallel to
         # the long axis of the table for picking/placing is not working!
         # The last item appended to source pos and dest pos below
+        source_pos_xyz = np.vstack((source_pos + np.array([0.01, 0]).reshape(-1, 1), np.array([[0.00005]])))
+        source_pos_angles = np.array([-np.pi / 2, float(np.arctan2(-(source_pos[0]-robotx), source_pos[1]-roboty))]).reshape(-1, 1)
+        source_pos = np.vstack((source_pos_xyz, source_pos_angles))
 
-        source_pos = np.append(source_pos,[0.005, -np.pi / 2, float(np.arctan2(-(source_pos[0]-robotx), source_pos[1]-roboty))])
-        dest_pos = np.append(dest_pos, [0.035, -np.pi / 2, float(np.arctan2(-(source_pos[0]-robotx), source_pos[1]-roboty))])
+        dest_pos_xyz = np.vstack((dest_pos, np.array([[0.035]])))
+        dest_pos_angles = np.array([-np.pi / 2, float(np.arctan2(-(dest_pos[0]-robotx), dest_pos[1]-roboty))]).reshape(-1, 1)
+        dest_pos = np.vstack((dest_pos_xyz, dest_pos_angles))
+        
+        self.node.get_logger().info("given source: " + str(source_pos))
+        self.node.get_logger().info("given dest: " + str(dest_pos))
 
-        source_angle = 'computed wrist roll angle: ' + str(float(np.arctan2(-(source_pos[0]-robotx), source_pos[1]-roboty)))
-        self.node.get_logger().info(source_angle)
+        # Newton Raphson Algorithm for Joint Spline
+        q_pos_source = np.array([0, -0.2, 1.88, -2.25, 0]).reshape(-1, 1)
+        while True:
+            (p, _, Jv, _) = self.chain.fkin(q_pos_source)
+            e = ep(source_pos, np.vstack((p, alpha(q_pos_source),beta(q_pos_source))))
+            if np.linalg.norm(e) <= 1e-14:
+                break
+            J = np.vstack((Jv, J_EULER))
+
+            q_pos_source = q_pos_source + np.linalg.solve(J, e)
+
+        q_pos_dest = np.array([0, -0.2, 1.88, -2.25, 0]).reshape(-1, 1)
+        while True:
+            (p, _, Jv, _) = self.chain.fkin(q_pos_dest)
+            e = ep(dest_pos, np.vstack((p, alpha(q_pos_dest),beta(q_pos_dest))))
+            if np.linalg.norm(e) <= 1e-14:
+                break
+            J = np.vstack((Jv, J_EULER))
+
+            q_pos_dest = q_pos_dest + np.linalg.solve(J, e)
+
+        self.node.get_logger().info("src joint " + str(q_pos_source))
+        self.node.get_logger().info("dest pos " + str(q_pos_dest))
+
+        self.add_state(Tasks.JOINT_SPLINE, side=q_pos_source, T = 5)
+        self.add_state(Tasks.GRIP, grip=True)
+        self.add_state(Tasks.TASK_SPLINE, x_final=source_pos+np.array([0, 0, 0.1, 0, 0]).reshape(-1, 1), T=2)
+        self.add_state(Tasks.JOINT_SPLINE, side=q_pos_dest, T = 5)
+        self.add_state(Tasks.GRIP, grip=False)
+        self.add_state(Tasks.INIT)
+
 
         #self.node.get_logger().info(f"source pos {source_pos}")
         #self.node.get_logger().info(f"dest pos {dest_pos}")
 
-        if source_pos[0] - robotx < -0.1:
-            source_left = True
-        else:
-            source_left = False
-        if dest_pos[0] - robotx < -0.1:
-            dest_left = True
-        else:
-            dest_left = False   
+        # if source_pos[0] - robotx < -0.1:
+        #     source_left = True
+        # else:
+        #     source_left = False
+        # if dest_pos[0] - robotx < -0.1:
+        #     dest_left = True
+        # else:
+        #     dest_left = False   
 
-        # TODO: add vertical motion spline as final piece
+        # # TODO: add vertical motion spline as final piece
 
-        if source_left:
-            self.add_state(Tasks.JOINT_SPLINE, side=0, T = 5)
-        else:
-            self.add_state(Tasks.JOINT_SPLINE, side=1, T = 5)
-        self.add_state(Tasks.TASK_SPLINE,x_final = np.array(source_pos), T = 5)
-        self.add_state(Tasks.GRIP)
-        if source_left:
-            self.add_state(Tasks.JOINT_SPLINE, side=0, T = 5)
-        else:
-            self.add_state(Tasks.JOINT_SPLINE, side=1, T = 5)
-        if dest_left and not source_left:
-            self.add_state(Tasks.JOINT_SPLINE, side=0, T = 5)
-        elif not dest_left and source_left:
-            self.add_state(Tasks.JOINT_SPLINE, side=1, T = 5)
-        self.add_state(Tasks.TASK_SPLINE,x_final = np.array(dest_pos), T = 5)
-        self.add_state(Tasks.GRIP, grip = False)
-        self.add_state(Tasks.INIT)
+        # if source_left:
+        #     self.add_state(Tasks.JOINT_SPLINE, side=0, T = 5)
+        # else:
+        #     self.add_state(Tasks.JOINT_SPLINE, side=1, T = 5)
+        # self.add_state(Tasks.TASK_SPLINE,x_final = np.array(source_pos), T = 5)
+        # self.add_state(Tasks.GRIP)
+        # if source_left:
+        #     self.add_state(Tasks.JOINT_SPLINE, side=0, T = 5)
+        # else:
+        #     self.add_state(Tasks.JOINT_SPLINE, side=1, T = 5)
+        # if dest_left and not source_left:
+        #     self.add_state(Tasks.JOINT_SPLINE, side=0, T = 5)
+        # elif not dest_left and source_left:
+        #     self.add_state(Tasks.JOINT_SPLINE, side=1, T = 5)
+        # # self.add_state(Tasks.TASK_SPLINE, x_final = source_pos_star, T = 5)
+        # # self.add_state(Tasks.TASK_SPLINE, x_final = source_pos, T = 5)
+        # # self.add_state(Tasks.GRIP, grip = True)
+        #self.add_state(Tasks.TASK_SPLINE, x_final = dest_pos, T = 5)
+        # self.add_state(Tasks.GRIP, grip = False)  
+        # self.add_state(Tasks.INIT)
 
     def pick_and_drop(self, pos):
         p1 = np.array([pos[0], pos[1], pos[2] + 0.05, -np.pi / 2, 0]).reshape(-1, 1)
