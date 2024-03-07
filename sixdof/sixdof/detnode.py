@@ -1,4 +1,4 @@
-# TODO: add turn indicator detection
+# TODO: add turn signal detection
 # TODO: tweak hsv bounds so it can detect in shadows
 
 import numpy as np
@@ -16,7 +16,7 @@ from sixdof.utils.TransformHelpers import *
 from sixdof.gamenode import Color
 
 GREEN_CHECKER_LIMITS = np.array(([30, 70], [25, 80], [30, 90]))
-BROWN_CHECKER_LIMITS = np.array(([100, 150], [20, 75], [90, 160]))
+BROWN_CHECKER_LIMITS = np.array(([100, 150], [20, 75], [70, 180]))
 YELLOW_BOARD_LIMITS = np.array([[80, 120], [100, 220], [150, 180]])
 RED_BOARD_LIMITS = np.array([[100, 140], [160, 240], [100, 180]])
 BLUE_BOARD_LIMITS = np.array([[0, 40],[90, 140],[100, 190]])
@@ -47,7 +47,7 @@ class DetectorNode(Node):
 
         self.pub_dice = self.create_publisher(UInt8MultiArray, '/dice', 3)
 
-        self.pub_turn_indicator = self.create_publisher(Bool, '/turn', 10)
+        self.pub_turn_signal = self.create_publisher(Bool, '/turn', 10)
         
         #publishers for debugging images
         self.pub_board_mask = self.create_publisher(Image, 
@@ -89,6 +89,7 @@ class DetectorNode(Node):
 
         self.green_beliefs = None
         self.brown_beliefs = None
+        self.turn_signal_belief = None
         
     def get_time(self):
         return 1e-9 * self.get_clock().now().nanoseconds - self.start_time
@@ -112,12 +113,14 @@ class DetectorNode(Node):
 
         self.detect_checkers(frame, Color.GREEN)
         self.detect_checkers(frame, Color.BROWN)
+        #self.detect_turn_signal(frame)
         self.update_occupancy()
 
         ####### Comment out for better performance without viz #######
         self.draw_best_board() # draws current best board in uv on self.rgb
         self.draw_checkers() # draws filtered checker locations
         self.draw_buckets() # draws current bucket knowledge on self.rgb 
+        #self.draw_turn_signal()
 
         self.publish_rgb()
         ###############################################################
@@ -199,7 +202,7 @@ class DetectorNode(Node):
                 self.best_board_uv = np.array(rect_uv)
                 board_msk = np.zeros(binary_board.shape)
                 rect_uv = np.int0(np.array(rect_uv, dtype=np.float32))
-                self.board_mask_uv = np.uint8(cv2.drawContours(board_msk,[rect_uv],0,200,-1))
+                self.board_mask_uv = np.uint8(cv2.drawContours(board_msk,[rect_uv],0,255,-1))
 
         self.update_centers()
 
@@ -283,9 +286,40 @@ class DetectorNode(Node):
         limits = self.brown_checker_limits
 
         binary = cv2.inRange(hsv, limits[:, 0], limits[:, 1])
+
+        binary = cv2.bitwise_and(binary, binary, mask=cv2.bitwise_not(self.board_mask_uv))
+        
+        #binary = cv2.dilate(binary, None, iterations=2)
+        binary = cv2.erode(binary, None, iterations=3)
+        binary = cv2.dilate(binary, None, iterations=3)
+        #binary = cv2.erode(binary, None, iterations=3)
+        #binary = cv2.erode(binary, None, iterations=3)
+
+        circles = cv2.HoughCircles(binary, cv2.HOUGH_GRADIENT, dp=1, minDist=27,
+                                   param1=7, param2=10, minRadius=12, maxRadius=17)
+
+        turnsignal = []
+        if circles is not None and len(circles[0]) == 1:
+            circles = np.round(circles[0, :]).astype("int")
+            for (u, v, r) in circles:
+                xy = uvToXY(self.M, int(u), int(v))
+                if xy is not None:
+                    [x, y] = xy
+                    cv2.circle(self.rgb, np.int0(np.array([u,v])), r, color=(0,0,255), thickness=3)
+                    turnsignal.append([x, y])
+            turnsignal = np.array(turnsignal)
+
+        if self.turn_signal_belief is None:
+                    self.turn_signal_belief = [[pos,0] for pos in turnsignal]
+        else:
+            self.turn_signal_belief = correspondence(turnsignal, self.turn_signal_belief)
+            positions = np.array([group[0] for group in self.turn_signal_belief if group[1] > 2])
+            if len(positions) == 1:
+                self.publish_turn_signal(positions[0])
+
         cv2.imshow('turnsignal', binary)
         cv2.waitKey(1)
-        pass
+        return None
 
     def update_centers(self):
         if self.best_board_xy[0] is None: # make sure we have detected the board
@@ -406,6 +440,16 @@ class DetectorNode(Node):
                         [u,v] = uv
                         cv2.circle(self.rgb, np.int0(np.array([u,v])), radius=15, color=(0,255,0), thickness=3)
 
+    def draw_turn_signal(self):
+        if self.turn_signal_belief is not None:
+            if len(self.turn_signal_belief) == 1:
+                if self.turn_signal_belief[0][1] > 1.5:
+                    [x,y] = self.turn_signal_belief[0][0]
+                    uv = xyToUV(self.Minv,x,y)
+                    if uv is not None:
+                        [u,v] = uv
+                        cv2.circle(self.rgb, np.int0(np.array([u,v])), radius=15, color=(156,87,255), thickness=3)
+
     def draw_buckets(self):
         if self.best_board_xy[0] is None:
             return None
@@ -475,6 +519,14 @@ class DetectorNode(Node):
                 self.pub_green.publish(checkerarray)
             else:
                 self.pub_brown.publish(checkerarray)
+
+    def publish_turn_signal(self, turn_signal):
+        ind = Bool()
+        if turn_signal[1] > 0.41:
+            ind.data = False
+        else:
+            ind.data = True
+        self.pub_turn_signal.publish(ind)
 
     def publish_rgb(self):
             (H, W, D) = self.rgb.shape

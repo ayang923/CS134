@@ -1,3 +1,4 @@
+import copy
 # TODO: alter game state handling so we can play against the robot, have the
 # robot play as green, need turn indicator handling.
 
@@ -69,7 +70,6 @@ class GameNode(Node):
                                    [0,0]])
 
         # each entry has a list of [x,y] positions of the checkers in that bar
-        # right now basically redundant with gamestate
         self.checker_locations = None
         
         self.scored = 0
@@ -79,11 +79,12 @@ class GameNode(Node):
         # self.recvbrown populates these arrays with detected brown checker pos
         self.brownpos = None
         # self.recvdice populates this with detected [die1_int, die2_int]
-        self.dice = np.array([])
+        self.dice = []
 
         # Flags
-        self.wrong_count = False
+        self.two_colors_row = False
         self.out_of_place = False
+        self.turn_signal = False
         
         # Source and destination info
         self.repeat_source = 0
@@ -143,10 +144,15 @@ class GameNode(Node):
         places values in self.dice
         TODO
         '''
-        pass
+        dice = []
+        for die in msg.data:
+            dice.append(die)
+        self.dice = dice
+        self.game.dice = dice
 
     def save_turn(self, msg):
-        self.turn
+        if msg.data == True:
+            self.turn 
         pass
 
     def save_board_dims(self, msg:Pose):
@@ -209,7 +215,7 @@ class GameNode(Node):
         x = cx + L/2 - dL0 - 5*dL - (dL1+dL)/2
         y = cy
         centers[24] = [x,y] # bar
-        for j in np.arange(6):
+        for j in range_middle_out(0,5):
             y = cy + 2.5*dH - j*dH
             grid[24][j] = [x,y]
         
@@ -233,8 +239,7 @@ class GameNode(Node):
                              [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
                              [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
                              [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
-                             [[],[]]]
-        unsorted = [[],[]]
+                             [[],[]], [[],[]]] # last two are bar and unsorted
         
         if self.greenpos is None or self.brownpos is None or self.board_buckets is None:
             # self.get_logger().info("green pos " + str(self.greenpos))
@@ -256,7 +261,7 @@ class GameNode(Node):
                     checker_locations[bucket_ind][0].append(green)
                     sorted = True
             if sorted == False:
-                unsorted[0].append(green)
+                checker_locations[25][0].append(green)
 
         for brown in self.brownpos:
             sorted = False
@@ -272,7 +277,7 @@ class GameNode(Node):
                     checker_locations[bucket_ind][1].append(brown)
                     sorted = True
             if sorted == False:
-                unsorted[1].append(brown)
+                checker_locations[25][1].append(brown)
 
         # Check that we have the right amount of checkers!
 
@@ -281,22 +286,20 @@ class GameNode(Node):
             greencount = len(checker_locations[i][0])
             browncount = len(checker_locations[i][1])
             if (greencount != 0 and browncount !=0) and i != 24:
-                self.wrong_count = True # TODO
-                return None
+                self.two_colors_row = True # raise flag that a row has more than one color (not bar)
             total += greencount + browncount
         total += self.scored
         if total != 30:
-            if total + len(unsorted[0]) + len(unsorted[1]) == 30:
-                self.out_of_place = True # TODO
+            if total + len(checker_locations[25][0]) + len(checker_locations[25][1]) == 30:
+                self.out_of_place = True # raise flag that a checker is mispositioned wrt the triangles
             else:
-                return None # don't update, something is changing/blocked
-        else:
-            for i in np.arange(25):
-                greencount = len(checker_locations[i][0])
-                browncount = len(checker_locations[i][1])            
-                self.gamestate[i] = [greencount,browncount] # this will only be updated if none of the above flags were raised.
-                # if a flag was raised, we must have the last gamestate stored.
-            self.checker_locations = checker_locations
+                return None # don't update, something is changing/blocked        
+        for i in np.arange(25):
+            greencount = len(checker_locations[i][0])
+            browncount = len(checker_locations[i][1])            
+            self.gamestate[i] = [greencount,browncount] # this will only be updated if none of the above flags were raised.
+            # if a flag was raised, we must have the last gamestate stored.
+        self.checker_locations = checker_locations
 
     def determine_action(self, msg):
         '''
@@ -328,13 +331,41 @@ class GameNode(Node):
 
         #self.get_logger().info('determine action running')
         
-        self.game.set_state(self.gamestate)
-        moves = self.handle_turn(self.game)
-        
-        if self.game.turn == 1:
-            self.get_logger().info("Green Turn!")
+        if self.turn_signal:
+            self.get_logger().info("Robot (Green) Turn!")
         else:
-            self.get_logger().info("Purple Turn!")
+            return None
+        
+        checkgame = Game(self.gamestate)
+        if checkgame.state in self.game.legal_next_states(self.game.dice): # Check that self.gamestate is a legal progression from last state given roll
+            moves = self.handle_turn(self.game)
+            self.game.set_state(self.gamestate) # update game.state
+            sources = []
+            dests = []
+            for (source,dest) in moves:
+                self.repeat_source = sources.count(source)
+                self.repeat_dest = dests.count(dest)
+                sources.append(source)
+                dests.append(dest)
+                self.get_logger().info("Moving from {} to {}".format(source, dest))
+                if source is None:
+                    self.execute_off_bar(dest)
+                elif dest is None:
+                    self.execute_bear_off(source)
+                elif (np.sign(self.game.state[source]) != np.sign(self.game.state[dest]) and 
+                    self.game.state[dest] != 0):
+                    self.execute_hit(source, dest)
+                else:
+                    self.execute_normal(source, dest)
+                    
+                #self.game.move(source, dest) # comment out to rely only on detectors for gamestate
+                #self.get_logger().info("Gamestate after move:"+str(self.game.state))
+                #self.get_logger().info("exectued the move")
+            self.game.turn *= -1 # comment out if robot only plays as one color
+        else:
+            self.get_logger().info('Fixing board!!')
+            self.fix_board() # TODO!!
+
         #print("Camera game state: {}".format(self.gamestate))
         #print("Engine game state: {}".format(self.game.state))
         self.get_logger().info("Dice roll: {}".format(self.game.dice))
@@ -357,28 +388,10 @@ class GameNode(Node):
         # on as the destination
 
         #self.get_logger().info("Gamestate:"+str(self.game.state))
-        sources = []
-        dests = []
-        for (source,dest) in moves:
-            self.repeat_source = sources.count(source)
-            self.repeat_dest = dests.count(dest)
-            sources.append(source)
-            dests.append(dest)
-            self.get_logger().info("Moving from {} to {}".format(source, dest))
-            if source is None:
-                self.execute_off_bar(dest)
-            elif dest is None:
-                self.execute_bear_off(source)
-            elif (np.sign(self.game.state[source]) != np.sign(self.game.state[dest]) and 
-                  self.game.state[dest] != 0):
-                self.execute_hit(source, dest)
-            else:
-                self.execute_normal(source, dest)
-                
-            self.game.move(source, dest)
-            #self.get_logger().info("Gamestate after move:"+str(self.game.state))
-            #self.get_logger().info("exectued the move")
-        self.game.turn *= -1
+    
+    def fix_board(self):
+        # TODO!!!
+        pass
     
     def execute_off_bar(self, dest):
         turn = 0 if self.game.turn == 1 else 1
@@ -404,8 +417,8 @@ class GameNode(Node):
         dest_centers = self.grid_centers[dest]
 
         # there is a problem here with how the new last checkers work 
-        source_pos = self.last_checker(dest,turn, repeat=0) # grab solo checker
-        dest_pos = self.next_free_place(bar,turn,repeat=0)
+        source_pos = self.last_checker(dest, 1 if turn == 0 else 0, repeat=0) # grab solo checker
+        dest_pos = self.next_free_place(bar, 1 if turn == 0 else 0, repeat=0)
 
         self.publish_checker_move(source_pos, dest_pos) # publish move
 
@@ -465,6 +478,8 @@ class GameNode(Node):
         # color is 0 or 1 for the turn, ie green 0 brown 1
         positions = self.grid_centers[row]
         num_dest = self.gamestate[row][color] + repeat
+        if row == 24:
+            num_dest += self.gamestate[row][0 if color == 1 else 1]        
         return positions[num_dest]
 
 
@@ -474,23 +489,6 @@ class GameNode(Node):
         Repeat shoudl be set to zero if the row is not accessed more then
         once in one players turn
         '''
-        positions = self.checker_locations[row][color]
-        # sortedpos = sorted(self.checker_locations[row][color], key=lambda x: x[1])
-        # self.get_logger().info("Positions sorted:"+str(sortedpos))
-        #self.get_logger().info("Positions:"+str(positions))
-        # lowest = np.inf
-        # min_index = None
-        # i = 0
-        # for position in positions:
-        #     if abs(position[1]-self.board_y) < lowest:
-        #         lowest = abs(position[1]-self.board_y)
-        #         min_index = i
-        #     i += 1
-        # self.get_logger().info("Row:"+ str(row))
-        # self.get_logger().info("Color:"+ str(color))
-        # self.get_logger().info("Min_index:"+ str(min_index))
-        # logstring = f'Last checker for row {row}: {self.checker_locations[row][color][min_index]}'
-        # self.get_logger().info(logstring)
         if row <= 11:
             sorted_positions = sorted(self.checker_locations[row][color], key=lambda x: x[1])
         else:
@@ -655,6 +653,56 @@ class Game:
     
         return moves
     
+    def legal_next_states(self, dice):
+        # TODO: make sure this actually works!!
+        [die1, die2] = dice
+        states = []
+        if die1 == die2: # four moves, check all possible resulting states
+            moves1 = self.possible_moves(die1)
+            for move1 in moves1:
+                copy1 = copy.copy(self)
+                copy1.move(move1)
+                moves2 = copy1.possible_moves(die1)
+                for move2 in moves2:
+                    copy2 = copy.copy(copy1)
+                    copy2.move(move2)
+                    moves3 = copy2.possible_moves(die1)
+                    for move3 in moves3:
+                        copy3 = copy.copy(copy2)
+                        copy3.move(move3)
+                        moves4 = copy3.possible_moves(die1)
+                        for move4 in moves4:
+                            copy4 = copy.copy(copy3)
+                            copy4.move(move4)
+                            if copy4.state not in states:
+                                states.append(copy4.state)
+        else:
+            # find all states that could result from using die 1 then die 2
+            moves = self.possible_moves(die1)
+            for move1 in moves1:
+                copy1 = copy.copy(self)
+                copy1.move(move1)
+                moves2 = copy1.possible_moves(die2)
+                for move2 in moves2:
+                    copy2 = copy.copy(copy1)
+                    copy2.move(move2)
+                    if copy2.state not in states: # only add if not already in states
+                        states.append(copy2.state)
+            # find all states that could result from using die 2 then die 1
+            moves = self.possible_moves(die2)
+            for move1 in moves1:
+                copy1 = copy.copy(self)
+                copy1.move(move1)
+                moves2 = copy1.possible_moves(die1)
+                for move2 in moves2:
+                    copy2 = copy.copy(copy1)
+                    copy2.move(move2)
+                    if copy2.state not in states: # only add if not already in states
+                        states.append(copy2.state)
+                
+        
+
+    
     def all_checkers_in_end(self):
         if self.turn == 1:
             for i in range(18):
@@ -680,6 +728,29 @@ class Game:
                 if point < 0:
                     sum -= point
             return sum
+        
+def range_middle_out(start, stop, step=1):
+    """
+    Generates a list of integers similar to range() but starts from the middle and works outwards.
+    
+    Args:
+        start (int): The starting value of the range.
+        stop (int): The ending value of the range.
+        step (int, optional): The step between each pair of consecutive values. Default is 1.
+    
+    Returns:
+        list: A list of integers starting from the middle and working outwards.
+    """
+    middle = (start + stop) // 2  # Calculate the middle value
+    
+    # Generate the list from the middle value, working outwards
+    result = []
+    for i in range(0, middle - start + 1, step):
+        result.append(middle + i)
+        if middle - i != middle + i:
+            result.append(middle - i)
+    
+    return result
         
 def main(args=None):
     # Initialize ROS.

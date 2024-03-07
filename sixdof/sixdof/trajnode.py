@@ -122,10 +122,13 @@ class TrajectoryNode(Node):
         '''
         if self.task_handler.curr_task_object is not None:
             if self.task_handler.curr_task_object.done and len(self.task_handler.tasks) == 0 and not self.waiting_for_move:
-                self.waiting_for_move = True
-                msg = Bool()
-                msg.data = self.waiting_for_move
-                self.moveready_pub.publish(msg)
+                if self.task_handler.curr_task_type is Tasks.INIT:
+                    self.waiting_for_move = True
+                    msg = Bool()
+                    msg.data = self.waiting_for_move
+                    self.moveready_pub.publish(msg)
+                else:
+                    self.task_handler.add_state(Tasks.INIT)
                 
 
     # Receive new command update from trajectory - called repeatedly by incoming messages.
@@ -156,8 +159,8 @@ class TrajectoryNode(Node):
         return (q, qdot)
     
     def gravitycomp(self, q):
-        tau_elbow = -6 * np.sin(-q[1] + q[2])
-        tau_shoulder = -tau_elbow + 9 * np.sin(-q[1])
+        tau_elbow = -6.3 * np.sin(-q[1] + q[2])
+        tau_shoulder = -tau_elbow + 9.5 * np.sin(-q[1])
         return (tau_shoulder, tau_elbow)
 
     # Send a command - called repeatedly by the timer.

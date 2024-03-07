@@ -261,12 +261,12 @@ class TaskHandler():
         # FIXME Known Issue: ensuring the wrist is always parallel to
         # the long axis of the table for picking/placing is not working!
         # The last item appended to source pos and dest pos below
-        source_pos_xyz = np.vstack((source_pos + np.array([0.005, 0]).reshape(-1, 1), np.array([[0.00005]])))
+        source_pos_xyz = np.vstack((source_pos + np.array([0.015, 0]).reshape(-1, 1), np.array([[0.00005]])))
         source_pos_angles = np.array([-np.pi / 2, 0.2+float(np.arctan2(-(source_pos[0]-robotx), source_pos[1]-roboty))]).reshape(-1, 1)
         source_pos = np.vstack((source_pos_xyz, source_pos_angles))
-        above_source_pos = source_pos+np.array([0, 0, 0.08, 0, 0]).reshape(-1, 1)
+        above_source_pos = source_pos+np.array([0, 0, 0.1, 0, 0]).reshape(-1, 1)
 
-        dest_pos_xyz = np.vstack((dest_pos, np.array([[0.035]])))
+        dest_pos_xyz = np.vstack((dest_pos, np.array([[0.05]])))
         dest_pos_angles = np.array([-np.pi / 2, 0.2+float(np.arctan2(-(dest_pos[0]-robotx), dest_pos[1]-roboty))]).reshape(-1, 1)
         dest_pos = np.vstack((dest_pos_xyz, dest_pos_angles))
         
@@ -275,7 +275,8 @@ class TaskHandler():
 
         # Queue Trajectories
         # Joint spline to 10cm above pick checker
-        self.add_state(Tasks.JOINT_SPLINE, x_final=above_source_pos, T=5)
+        #self.add_state(Tasks.JOINT_SPLINE, x_final=above_source_pos, T=5)
+        self.add_state(Tasks.TASK_SPLINE, x_final=above_source_pos, T=5)
         # Task spline to pick checker
         self.add_state(Tasks.TASK_SPLINE, x_final=source_pos, T=2)
         # Grip checker
@@ -283,7 +284,8 @@ class TaskHandler():
         # Task spline to pull up from checker
         self.add_state(Tasks.TASK_SPLINE, x_final=above_source_pos, T=2)
         # Joint spline to destination
-        self.add_state(Tasks.JOINT_SPLINE, x_final=dest_pos, T=5)
+        #self.add_state(Tasks.JOINT_SPLINE, x_final=dest_pos, T=5)
+        self.add_state(Tasks.TASK_SPLINE, x_final=dest_pos, T=5)
         # Release checker
         self.add_state(Tasks.GRIP, grip=False)
         # Back to wait position
