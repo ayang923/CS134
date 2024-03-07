@@ -1,5 +1,6 @@
-# TODO: add turn signal detection
-# TODO: tweak hsv bounds so it can detect in shadows
+# TODO: tweak hsv bounds so it can detect in shadows (especially for brown/purple)
+# TODO: verify turn signal detect / publish functionality (DetectorNode.detect_turn_signal()
+# and DetectorNode.publish_turn_signal())
 
 import numpy as np
 import rclpy
@@ -47,7 +48,7 @@ class DetectorNode(Node):
 
         self.pub_dice = self.create_publisher(UInt8MultiArray, '/dice', 3)
 
-        self.pub_turn_signal = self.create_publisher(Bool, '/turn', 10)
+        self.pub_turn_signal = self.create_publisher(Pose, '/turn', 10)
         
         #publishers for debugging images
         self.pub_board_mask = self.create_publisher(Image, 
@@ -521,12 +522,10 @@ class DetectorNode(Node):
                 self.pub_brown.publish(checkerarray)
 
     def publish_turn_signal(self, turn_signal):
-        ind = Bool()
-        if turn_signal[1] > 0.41:
-            ind.data = False
-        else:
-            ind.data = True
-        self.pub_turn_signal.publish(ind)
+        p = pxyz(turn_signal[0],turn_signal[1],0.0)
+        R = Reye()
+        msg = Pose_from_T(T_from_Rp(R,p))
+        self.pub_turn_signal.publish(msg)
 
     def publish_rgb(self):
             (H, W, D) = self.rgb.shape

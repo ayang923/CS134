@@ -1,3 +1,12 @@
+# TODO: make sure the wrist roll angle is always correct when going to pick/place
+# a checker and gives us minimal chance of missing.
+# TODO: (lower priority) add a missed grab "detector" which re-tries grabbing the checker if it
+# missed the first time and the gripper closed all the way (based on joint angle)
+# TODO: (lower priority) finish fixing JointSplineTask N-R iteration
+    # Gunter recommended adding something to the algorithm which does not allow
+    # the solver to get outside our *known* bounds for the joint angles within the
+    # workspace
+
 from sixdof.utils.TrajectoryUtils import *
 from sixdof.utils.KinematicChain import *
 from sixdof.utils.TransformHelpers import *
@@ -303,8 +312,6 @@ class TaskHandler():
         #     dest_left = True
         # else:
         #     dest_left = False   
-
-        # # TODO: add vertical motion spline as final piece
 
         # if source_left:
         #     self.add_state(Tasks.JOINT_SPLINE, side=0, T = 5)

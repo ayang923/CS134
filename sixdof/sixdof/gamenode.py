@@ -1,6 +1,16 @@
-import copy
+# TODO: Finish fixing checker selection, ie making sure the robot does not try
+# to pick / place from the same row twice during a move.
+# TODO: verify game.legal_states functionality
+# TODO: test publishing to /dice from terminal as an intermediary for dice detection
 # TODO: alter game state handling so we can play against the robot, have the
-# robot play as green, need turn indicator handling.
+# robot play as green, verify/test turn indicator handling
+    # 1. Handling GameNode.turn_signal (Boolean) in GameNode.determine_action to make
+    # sure we do not try to move when the turn signal is telling us it is not our
+    # turn.
+    # 2. When it is our turn, ensuring the last sent action is "move the turn signal
+    # from GameNode.turn_signal_pos to the other (hardcoded?) position"
+# TODO: (lower priority) write and test GameNode.fix_board()
+    # For now, fine to just have it print / log an error
 
 from geometry_msgs.msg  import Pose, PoseArray
 from std_msgs.msg import UInt8MultiArray, Bool
@@ -15,6 +25,8 @@ import random
 from sixdof.utils.TransformHelpers import *
 
 from sixdof.states import *
+
+import copy
 
 class Color(Enum):
     GREEN = 1
@@ -44,7 +56,7 @@ class GameNode(Node):
         self.sub_moveready = self.create_subscription(Bool, '/move_ready',
                                                       self.determine_action, 1)
         
-        self.sub_turn = self.create_subscription(Bool, '/turn', self.save_turn, 10)
+        self.sub_turn = self.create_subscription(Pose, '/turn', self.save_turn, 10)
         
         self.determining = False
         
@@ -80,11 +92,14 @@ class GameNode(Node):
         self.brownpos = None
         # self.recvdice populates this with detected [die1_int, die2_int]
         self.dice = []
+        # self.save turn populates this with turn indicator position
+        self.turn_signal_pos = None
 
         # Flags
         self.two_colors_row = False
         self.out_of_place = False
         self.turn_signal = False
+        self.firstmove = True
         
         # Source and destination info
         self.repeat_source = 0
@@ -142,7 +157,6 @@ class GameNode(Node):
         in: /dice UInt8MultiArray
 
         places values in self.dice
-        TODO
         '''
         dice = []
         for die in msg.data:
@@ -151,9 +165,12 @@ class GameNode(Node):
         self.game.dice = dice
 
     def save_turn(self, msg):
-        if msg.data == True:
-            self.turn 
-        pass
+        # Save the detected turn signal
+        self.turn_signal_pos = p_from_T(T_from_Pose(msg))
+        if self.turn_signal_pos[1] > 0.42:
+            self.turn_signal = True
+        else:
+            self.turn_signal = False
 
     def save_board_dims(self, msg:Pose):
         self.board_x = msg.position.x
@@ -334,10 +351,13 @@ class GameNode(Node):
         if self.turn_signal:
             self.get_logger().info("Robot (Green) Turn!")
         else:
-            return None
+            self.get_logger().info("Human Turn!")
+            #return None # comment out if having robot play against itself
         
         checkgame = Game(self.gamestate)
-        if checkgame.state in self.game.legal_next_states(self.game.dice): # Check that self.gamestate is a legal progression from last state given roll
+        if checkgame.state in self.game.legal_next_states(self.game.dice) or self.firstmove: # Check that self.gamestate is a legal progression from last state given roll
+            if self.firstmove:
+                self.firstmove = False
             moves = self.handle_turn(self.game)
             self.game.set_state(self.gamestate) # update game.state
             sources = []
@@ -371,21 +391,6 @@ class GameNode(Node):
         self.get_logger().info("Dice roll: {}".format(self.game.dice))
         #print("Number of moves: {}".format(len(moves)))
         self.get_logger().info("Chosen Moves: {}".format(moves))
-
-        # FIXME: Need to begin adding recovery logic: can have a number of checks
-        # each time it is "our turn" (ie determine_action is queried):
-        # TODO 1. If self.game.state does not match self.gamestate, fix the "failed
-        # action". See sort_checkers()
-        # TODO 2. If any checkers are too far away from the end of their stack, move them closer.
-        # Similarly, if any checkers are outside of the "legal zones", return them to
-        # their last known positions. See sort_checkers()
-        # TODO 3. If, after a human turn, the board does not match a legal gamestate,
-        # return checkers to their previous positions and make the human play again.
-
-        # FIXME: Known issue: if two moves to/from the same row are chosen,
-        # it sends repeat actions. Basically, it will choose the same checker as
-        # the one it just moved for the source, or the same spot as it just placed
-        # on as the destination
 
         #self.get_logger().info("Gamestate:"+str(self.game.state))
     
@@ -493,8 +498,9 @@ class GameNode(Node):
             sorted_positions = sorted(self.checker_locations[row][color], key=lambda x: x[1])
         else:
             sorted_positions = sorted(self.checker_locations[row][color], key=lambda x: x[1], reverse=True)
-        #self.get_logger().info("Repeat:"+str(repeat))
-        #self.get_logger().info("Choosen position:" + str(sorted_positions[repeat]))
+        self.get_logger().info("Repeat:"+str(repeat))
+        self.get_logger().info("sorted_pos"+str(sorted_positions))
+        self.get_logger().info("Choosen position:" + str(sorted_positions[repeat]))
         
         return sorted_positions[repeat]
         
@@ -659,6 +665,7 @@ class Game:
         states = []
         if die1 == die2: # four moves, check all possible resulting states
             moves1 = self.possible_moves(die1)
+            print('possiblemoves1', moves1)
             for move1 in moves1:
                 copy1 = copy.copy(self)
                 copy1.move(move1)
@@ -699,6 +706,7 @@ class Game:
                     copy2.move(move2)
                     if copy2.state not in states: # only add if not already in states
                         states.append(copy2.state)
+        return states
                 
         
 
