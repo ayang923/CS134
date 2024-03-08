@@ -1,4 +1,5 @@
 # TODO: tweak hsv bounds so it can detect in shadows (especially for brown/purple)
+# TODO: (higher prio) add "fine adjustment" based on tip cam?
 # TODO: (low prio) add textual indicator of whose turn it is
 
 import numpy as np

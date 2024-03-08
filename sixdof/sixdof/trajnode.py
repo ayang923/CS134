@@ -52,7 +52,7 @@ class TrajectoryNode(Node):
         self.task_handler = TaskHandler(self, np.array(self.position0).reshape(-1, 1))
 
         self.task_handler.add_state(Tasks.INIT)
-        #self.test([0.3,0.5], [-0.3,0.5])
+        #self.test(np.array([0.3,0.6]).reshape(-1,1), np.array([1.0,0.6]).reshape(-1,1))
 
         self.waiting_for_move = False
         self.moveready_pub = self.create_publisher(Bool, '/move_ready', 1)

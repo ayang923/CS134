@@ -1,6 +1,6 @@
 # TODO: make sure the wrist roll angle is always correct when going to pick/place
 # a checker and gives us minimal chance of missing.
-# TODO: (lower priority) add a missed grab "detector" which re-tries grabbing the checker if it
+# TODO: (higher! priority) add a missed grab "detector" which re-tries grabbing the checker if it
 # missed the first time and the gripper closed all the way (based on joint angle)
 # TODO: (lower priority) finish fixing JointSplineTask N-R iteration
     # Gunter recommended adding something to the algorithm which does not allow
@@ -270,12 +270,12 @@ class TaskHandler():
         # FIXME Known Issue: ensuring the wrist is always parallel to
         # the long axis of the table for picking/placing is not working!
         # The last item appended to source pos and dest pos below
-        source_pos_xyz = np.vstack((source_pos + np.array([0.015, 0]).reshape(-1, 1), np.array([[0.00005]])))
+        source_pos_xyz = np.vstack((source_pos + np.array([0.01, 0]).reshape(-1, 1), np.array([[0.00005]]).reshape(-1,1)))
         source_pos_angles = np.array([-np.pi / 2, 0.2+float(np.arctan2(-(source_pos[0]-robotx), source_pos[1]-roboty))]).reshape(-1, 1)
         source_pos = np.vstack((source_pos_xyz, source_pos_angles))
         above_source_pos = source_pos+np.array([0, 0, 0.1, 0, 0]).reshape(-1, 1)
 
-        dest_pos_xyz = np.vstack((dest_pos, np.array([[0.05]])))
+        dest_pos_xyz = np.vstack((dest_pos, np.array([[0.05]]).reshape(-1,1)))
         dest_pos_angles = np.array([-np.pi / 2, 0.2+float(np.arctan2(-(dest_pos[0]-robotx), dest_pos[1]-roboty))]).reshape(-1, 1)
         dest_pos = np.vstack((dest_pos_xyz, dest_pos_angles))
         
@@ -292,9 +292,13 @@ class TaskHandler():
         self.add_state(Tasks.GRIP, grip=True)
         # Task spline to pull up from checker
         self.add_state(Tasks.TASK_SPLINE, x_final=above_source_pos, T=2)
+        # uncomment for debug
+        #self.add_state(Tasks.TASK_SPLINE, x_final=above_source_pos, T=20)
         # Joint spline to destination
         #self.add_state(Tasks.JOINT_SPLINE, x_final=dest_pos, T=5)
         self.add_state(Tasks.TASK_SPLINE, x_final=dest_pos, T=5)
+        # uncomment for debug
+        #self.add_state(Tasks.TASK_SPLINE, x_final=dest_pos, T=20)
         # Release checker
         self.add_state(Tasks.GRIP, grip=False)
         # Back to wait position

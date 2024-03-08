@@ -1,6 +1,10 @@
 # TODO: Finish fixing checker selection, ie making sure the robot does not try
 # to pick / place from the same row twice during a move.
-# TODO: verify game.legal_states functionality
+# TODO: fix hardcoded placing positions (as good as we can)
+# TODO: handle_turn() returning illegal sets of moves
+# TODO: (lower priority!) verify game.legal_states functionality
+    # gunter said for now assume the opponent makes legal moves. Recognizing our own
+    # gripping mistake / using tip camera to adjust our pointing is a more interesting challenge!
 # TODO: test publishing to /dice from terminal as an intermediary for dice detection
 # TODO: alter game state handling so we can play against the robot, have the
 # robot play as green, verify/test turn indicator handling
@@ -9,7 +13,7 @@
     # turn.
     # 2. When it is our turn, ensuring the last sent action is "move the turn signal
     # from GameNode.turn_signal_pos to the other (hardcoded?) position"
-# TODO: (lower priority) write and test GameNode.fix_board()
+# TODO: (lower!! priority) write and test GameNode.fix_board()
     # For now, fine to just have it print / log an error
 
 from geometry_msgs.msg  import Pose, PoseArray
@@ -93,10 +97,10 @@ class GameNode(Node):
         # self.recvbrown populates these arrays with detected brown checker pos
         self.brownpos = None
         # self.recvdice populates this with detected [die1_int, die2_int]
-        self.dice = []
+        #self.dice = []
         # self.save turn populates this with turn indicator position
         self.turn_signal_pos = None
-        self.turn_signal_dest = [0.17,0.36]
+        self.turn_signal_dest = [0.20,0.33]
 
         # Flags
         self.two_colors_row = False # raised if any row other than bar contains more than 0 of both colors
@@ -368,16 +372,21 @@ class GameNode(Node):
 
         
         checkgame = Game(self.gamestate) # save the detected gamestate as a game object for comparison against the old gamestate
-        if (checkgame.state in self.game.legal_next_states(self.game.dice)) or self.firstmove: # Check that self.gamestate is a legal progression from last state given roll
+        #if ((checkgame.state in self.game.legal_next_states(self.game.dice)) or self.firstmove): # Check that self.gamestate is a legal progression from last state given roll
+        if True:
+            # FIXME: remove "or True" if we can get legal states working
             if self.firstmove:
                 self.firstmove = False
-            moves = self.handle_turn(self.game)
+            
             self.game.set_state(self.gamestate) # update game.state
+            self.get_logger().info("Gamestate is:" + str(self.gamestate))
+            self.get_logger().info("Game state is" + str(self.game.state))
+            moves = self.handle_turn(self.game) # roll dice and decide moves (with new gamestate)
 
             # Debugs
-            self.get_logger().info("Dice roll: {}".format(self.game.dice))
-            #print("Number of moves: {}".format(len(moves)))
-            self.get_logger().info("Chosen Moves: {}".format(moves))
+            self.get_logger().info("Robot turn dice roll: {}".format(self.game.dice))
+            # TODO: publish dice roll display to ipad through topic?
+            self.get_logger().info("Robot chosen Moves: {}".format(moves))
 
             sources = []
             dests = []
@@ -398,6 +407,10 @@ class GameNode(Node):
                     self.execute_normal(source, dest)
             self.publish_checker_move(self.turn_signal_pos,self.turn_signal_dest) # move the turn signal to indicate human turn
             self.determine_action_flag = False
+            self.game.roll() # next roll (for human)
+            self.get_logger().info('Human roll is: ' + str(self.game.dice))
+            # TODO: publish this roll to a topic so it can be displayed on an ipad?
+
                 #self.game.move(source, dest) # comment out to rely only on detectors for gamestate
                 #self.get_logger().info("Gamestate after move:"+str(self.game.state))
                 #self.get_logger().info("exectued the move")
@@ -475,6 +488,7 @@ class GameNode(Node):
                 move = self.choose_move(game, moves)
                 if move is not None:
                     final_moves.append(move)
+                    self.game.move(move[0],move[1])
         else:
             # larger = 1
             # if game.dice[0] > game.dice[1]:
@@ -483,11 +497,13 @@ class GameNode(Node):
             move = self.choose_move(game, moves)
             if move is not None:
                 final_moves.append(move)
+                self.game.move(move[0],move[1])
                 
             moves = game.possible_moves(game.dice[1])
             move = self.choose_move(game, moves)
             if move is not None:
                 final_moves.append(move)
+                self.game.move(move[0],move[1])
 
             #print("Moves in handle turn:", final_moves)
 
@@ -508,14 +524,14 @@ class GameNode(Node):
         Repeat shoudl be set to zero if the row is not accessed more then
         once in one players turn
         '''
-        self.get_logger().info('checker locations' + str(self.checker_locations))
+        #self.get_logger().info('checker locations' + str(self.checker_locations))
         if row <= 11:
             sorted_positions = sorted(self.checker_locations[row][color], key=lambda x: x[1])
         else:
             sorted_positions = sorted(self.checker_locations[row][color], key=lambda x: x[1], reverse=True)
-        self.get_logger().info("Repeat:"+str(repeat))
-        self.get_logger().info("sorted_pos"+str(sorted_positions))
-        self.get_logger().info("Choosen position:" + str(sorted_positions[repeat]))
+        #self.get_logger().info("Repeat:"+str(repeat))
+        #self.get_logger().info("sorted_pos"+str(sorted_positions))
+        #self.get_logger().info("Choosen position:" + str(sorted_positions[repeat]))
         
         return sorted_positions[repeat]
     
