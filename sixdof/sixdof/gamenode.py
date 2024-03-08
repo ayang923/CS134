@@ -382,6 +382,7 @@ class GameNode(Node):
             self.get_logger().info("Gamestate is:" + str(self.gamestate))
             self.get_logger().info("Game state is" + str(self.game.state))
             moves = self.handle_turn(self.game) # roll dice and decide moves (with new gamestate)
+            self.get_logger().info("After Handle Turn Game state is" + str(self.game.state))
 
             # Debugs
             self.get_logger().info("Robot turn dice roll: {}".format(self.game.dice))
@@ -391,20 +392,31 @@ class GameNode(Node):
             sources = []
             dests = []
             for (source,dest) in moves:
-                self.repeat_source = sources.count(source) + sources.count(dest)
+                # if source in dests: go to hardcoded center number (repeat - 1) of row source
+                self.repeat_source = sources.count(source) + sources.count(dests)
                 self.repeat_dest = dests.count(dest) + dests.count(source)
                 sources.append(source)
                 dests.append(dest)
                 self.get_logger().info("Moving from {} to {}".format(source, dest))
-                if source is None:
-                    self.execute_off_bar(dest)
-                elif dest is None:
+                self.get_logger().info("Source number"+str((self.game.state[source])))
+                self.get_logger().info("Dest number" + str(self.game.state[dest]))
+                if source == 24:
+                    if (np.sign(self.game.state[source][0]) != np.sign(self.game.state[dest]) and 
+                    self.game.state[dest] != 0):
+                        self.get_logger().info("Hit off bar!!")
+                        self.execute_hit(source, dest)
+                    else:
+                        self.execute_normal(source, dest)
+                    # self.execute_off_bar(dest)
+                elif dest == 24:
                     self.execute_bear_off(source)
                 elif (np.sign(self.game.state[source]) != np.sign(self.game.state[dest]) and 
                     self.game.state[dest] != 0):
+                    self.get_logger().info("Hit!!")
                     self.execute_hit(source, dest)
                 else:
                     self.execute_normal(source, dest)
+                self.game.move(source,dest)
             self.publish_checker_move(self.turn_signal_pos,self.turn_signal_dest) # move the turn signal to indicate human turn
             self.determine_action_flag = False
             self.game.roll() # next roll (for human)
@@ -443,19 +455,21 @@ class GameNode(Node):
         self.publish_checker_move(source_pos, dest_pos)
     
     def execute_hit(self, source, dest):
-        turn = 0 if self.game.turn == 1 else 1
+        # self.game.turn == 1 during robot (green) turn
+        turn = self.game.turn
         bar = 24
         
         dest_centers = self.grid_centers[dest]
 
         # there is a problem here with how the new last checkers work 
-        source_pos = self.last_checker(dest, 1 if turn == 0 else 0, repeat=0) # grab solo checker
-        dest_pos = self.next_free_place(bar, 1 if turn == 0 else 0, repeat=0)
+        source_pos_1 = self.last_checker(dest, turn, repeat=0) # grab solo checker
+        dest_pos = self.next_free_place(bar, turn, repeat=0)
 
-        self.publish_checker_move(source_pos, dest_pos) # publish move
+        self.publish_checker_move(source_pos_1, dest_pos) # publish move
+        turn = 0 if self.game.turn == 1 else 1
 
-        source_pos = self.last_checker(source,turn,self.repeat_source) # grab my checker
-        dest_pos = dest_centers[0] # and move where I just removed
+        source_pos = self.last_checker(source, turn, self.repeat_source) # grab my checker
+        dest_pos = source_pos_1 # and move where I just removed
 
         self.publish_checker_move(source_pos, dest_pos)
 
@@ -478,32 +492,33 @@ class GameNode(Node):
 
     def handle_turn(self, game):
         
+        gamecopy = Game(self.gamestate)
         moves = []
         game.roll()
         final_moves = []
         #print(self.game.state)
         if game.dice[0] == game.dice[1]:
             for _ in range(4):
-                moves = game.possible_moves(game.dice[0])
-                move = self.choose_move(game, moves)
+                moves = gamecopy.possible_moves(game.dice[0])
+                move = self.choose_move(gamecopy, moves)
                 if move is not None:
                     final_moves.append(move)
-                    self.game.move(move[0],move[1])
+                    gamecopy.move(move[0],move[1])
         else:
             # larger = 1
             # if game.dice[0] > game.dice[1]:
             #     larger = 0
-            moves = game.possible_moves(game.dice[0])
-            move = self.choose_move(game, moves)
+            moves = gamecopy.possible_moves(game.dice[0])
+            move = self.choose_move(gamecopy, moves)
             if move is not None:
                 final_moves.append(move)
-                self.game.move(move[0],move[1])
+                gamecopy.move(move[0],move[1])
                 
-            moves = game.possible_moves(game.dice[1])
-            move = self.choose_move(game, moves)
+            moves = gamecopy.possible_moves(game.dice[1])
+            move = self.choose_move(gamecopy, moves)
             if move is not None:
                 final_moves.append(move)
-                self.game.move(move[0],move[1])
+                gamecopy.move(move[0],move[1])
 
             #print("Moves in handle turn:", final_moves)
 
@@ -527,11 +542,15 @@ class GameNode(Node):
         #self.get_logger().info('checker locations' + str(self.checker_locations))
         if row <= 11:
             sorted_positions = sorted(self.checker_locations[row][color], key=lambda x: x[1])
-        else:
+        elif row <=24:
             sorted_positions = sorted(self.checker_locations[row][color], key=lambda x: x[1], reverse=True)
         #self.get_logger().info("Repeat:"+str(repeat))
         #self.get_logger().info("sorted_pos"+str(sorted_positions))
         #self.get_logger().info("Choosen position:" + str(sorted_positions[repeat]))
+        # When the position is the bar
+            
+        if not sorted_positions: # if an empty row because we moved a checker into a place where there was previosly 0
+                        return self.grid_centers[row][5 - (repeat-1)]
         
         return sorted_positions[repeat]
     
@@ -556,6 +575,7 @@ POINT_LIM = 6
 class Game:
     def __init__(self, gamestate):
         self.set_state(gamestate)
+        #INITIALIZATION OF BAR
         self.bar = [0, 0]
         self.dice = [0, 0]
         self.turn = 1
@@ -565,6 +585,7 @@ class Game:
     # Converts state in GameDriver format to state in engine format.
     def set_state(self, gamestate):
         self.state = []
+        # BAR USED AGAIN AS GAME STATE 24
         self.bar = gamestate[24]
         for point in gamestate[:24]:
             # If the column has a green
@@ -573,48 +594,49 @@ class Game:
             # If the columan has a brown
             else:
                 self.state.append(-point[1])
+        self.state.append(self.bar)
         #self.state = np.append(self.state[11::], self.state[:11:]).tolist()
 
     def roll(self):
         self.dice = np.random.randint(1, 7, size = 2).tolist()
     
     def move(self, point1, point2):
-        if point1 is None:
+        if point1 == 24:
             self.bar[0 if self.turn == 1 else 1] -= 1
         # The move turn of player One
         if self.turn == 1:
-            if point2 is None:
+            if point2 == 24:
                 self.state[point1] -= 1
             elif self.state[point2] >= 0:
-                if point1 is not None:
+                if point1 != 24:
                     self.state[point1] -= 1
                 self.state[point2] += 1
             elif self.state[point2] == -1:
-                if point1 is not None:
+                if point1 != 24:
                     self.state[point1] -= 1
                 self.state[point2] = 1
-                self.bar[1] += 1
+                self.state[24][1] += 1
         # The move turn of player Two
         elif self.turn == -1:
-            if point2 is None:
+            if point2 == 24:
                 self.state[point1] += 1
             elif self.state[point2] <= 0:
-                if point1 is not None:
+                if point1 != 24:
                     self.state[point1] += 1
                 self.state[point2] -= 1
             elif self.state[point2] == 1:
-                if point1 is not None:
+                if point1 != 24:
                     self.state[point1] += 1
                 self.state[point2] = -1
-                self.bar[0] += 1
+                self.state[24][0] += 1
 
     def is_valid(self, point1, point2, die, tried = False):
-        if point1 is None:
+        if point1 == 24:
             if (self.turn == 1 and -1 <= self.state[point2] < POINT_LIM and point2 + 1 == die or
                 self.turn == -1 and -POINT_LIM < self.state[point2] <= 1 and point2 == 24 - die):
                 return True
             return False
-        if point2 is None:
+        if point2 == 24:
             if (self.turn == 1 and self.state[point1] > 0 and (point1 + die >= 24 if tried else point1 + die == 24) or
                 self.turn == -1 and self.state[point1] < 0 and (point1 - die <= -1 if tried else point1 - die == -1)):
                 return True
@@ -634,19 +656,19 @@ class Game:
         moves = []
         #print("Moves at the beginning of possible moves")
         # Move off bar
-        if self.turn == 1 and self.bar[0]:
+        if self.turn == 1 and self.state[24][0]:
             #print("In move off bar turn 1")
             for point in range(6):
-                if self.is_valid(None, point, die):
+                if self.is_valid(24, point, die):
                     #print("Inside valid")
-                    moves.append((None, point))
+                    moves.append((24, point))
             return moves
-        elif self.turn == -1 and self.bar[1]:
+        elif self.turn == -1 and self.state[24][1]:
             #print("In move off bar turn -1 ")
             for point in range(18, 24):
-                if self.is_valid(None, point, die):
+                if self.is_valid(24, point, die):
                     #print("Inside valid")
-                    moves.append((None, point))
+                    moves.append((24, point))
             return moves
         
         # Move off board
@@ -654,14 +676,14 @@ class Game:
             #print("Inside move off board")
             if self.turn == 1:
                 for point in range(18, 24):
-                    if self.is_valid(point, None, die):
+                    if self.is_valid(point, 24, die):
                         #print("Inside valid")
-                        moves.append((point, None))
+                        moves.append((point, 24))
             elif self.turn == -1:
                 for point in range(6):
-                    if self.is_valid(point, None, die):
+                    if self.is_valid(point, 24, die):
                         #print("Inside valid")
-                        moves.append((point, None))
+                        moves.append((point, 24))
 
         # Normal moves
         if not moves:
@@ -679,14 +701,14 @@ class Game:
             #print("Inside move off board again")
             if self.turn == 1:
                 for point in range(18, 24):
-                    if self.is_valid(point, None, die, True):
+                    if self.is_valid(point, 24, die, True):
                         #print("Inside valid")
-                        moves.append((point, None))
+                        moves.append((point, 24))
             elif self.turn == -1:
                 for point in range(6):
-                    if self.is_valid(point, None, die, True):
+                    if self.is_valid(point, 24, die, True):
                         #print("Inside valid")
-                        moves.append((point, None))
+                        moves.append((point, 24))
     
         return moves
 
@@ -779,14 +801,14 @@ class Game:
         
     def num_checkers(self):
         if self.turn == 1:
-            sum = self.bar[0]
-            for point in self.state:
+            sum = self.state[24][0]
+            for point in self.state[:24]:
                 if point > 0:
                     sum += point
             return sum
         if self.turn == -1:
-            sum = self.bar[1]
-            for point in self.state:
+            sum = self.state[24][1]
+            for point in self.state[:24]:
                 if point < 0:
                     sum -= point
             return sum
