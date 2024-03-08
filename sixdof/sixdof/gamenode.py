@@ -203,7 +203,7 @@ class GameNode(Node):
         L = 1.061 # board length
         H = 0.536 # board width
         dL = 0.067 # triangle to triangle dist
-        dH = 0.040 # checker to checker stack dist
+        dH = 0.050 # checker to checker stack dist
 
         dL0 = 0.235 # gap from blue side to first triangle center
         dL1 = 0.117 - dL # gap between two sections of triangles (minus dL)
@@ -416,7 +416,6 @@ class GameNode(Node):
                     self.execute_hit(source, dest)
                 else:
                     self.execute_normal(source, dest)
-                self.game.move(source,dest)
             self.publish_checker_move(self.turn_signal_pos,self.turn_signal_dest) # move the turn signal to indicate human turn
             self.determine_action_flag = False
             self.game.roll() # next roll (for human)
@@ -443,6 +442,8 @@ class GameNode(Node):
 
         source_pos = self.last_checker(bar,turn, self.repeat_source)
         dest_pos = self.next_free_place(dest, turn, self.repeat_dest)
+        
+        self.game.move(24,dest)
 
         self.publish_checker_move(source_pos, dest_pos)
 
@@ -451,6 +452,7 @@ class GameNode(Node):
 
         source_pos = self.last_checker(source,turn, self.repeat_source)
         dest_pos = [0.5,0.3]
+        
 
         self.publish_checker_move(source_pos, dest_pos)
     
@@ -464,12 +466,14 @@ class GameNode(Node):
         # there is a problem here with how the new last checkers work 
         source_pos_1 = self.last_checker(dest, turn, repeat=0) # grab solo checker
         dest_pos = self.next_free_place(bar, turn, repeat=0)
+        self.game.move(dest,bar)
 
         self.publish_checker_move(source_pos_1, dest_pos) # publish move
         turn = 0 if self.game.turn == 1 else 1
 
         source_pos = self.last_checker(source, turn, self.repeat_source) # grab my checker
         dest_pos = source_pos_1 # and move where I just removed
+        self.game.move(source,dest)
 
         self.publish_checker_move(source_pos, dest_pos)
 
@@ -478,6 +482,7 @@ class GameNode(Node):
 
         source_pos = self.last_checker(source,turn,self.repeat_source)
         dest_pos = self.next_free_place(dest,turn,self.repeat_dest)
+        self.game.move(source,dest)
 
         self.publish_checker_move(source_pos, dest_pos)
     
@@ -491,7 +496,7 @@ class GameNode(Node):
         return None
 
     def handle_turn(self, game):
-        
+        bar = 24
         gamecopy = Game(self.gamestate)
         moves = []
         game.roll()
@@ -503,7 +508,19 @@ class GameNode(Node):
                 move = self.choose_move(gamecopy, moves)
                 if move is not None:
                     final_moves.append(move)
-                    gamecopy.move(move[0],move[1])
+                    if move[0] == 24: # off bar
+                        if np.sign(gamecopy.state[move[0]][0]) != np.sign(gamecopy.state[move[1]]) and gamecopy.state[move[1]] != 0:
+                            # hit off bar
+                            gamecopy.move(move[1],bar)
+                            gamecopy.move(move[0],move[1])
+                        else:
+                            gamecopy.move(move[0],move[1])
+                    elif np.sign(gamecopy.state[move[0]]) != np.sign(gamecopy.state[move[1]]) and gamecopy.state[move[1]] != 0:
+                        # normal hit
+                        gamecopy.move(move[1],bar)
+                        gamecopy.move(move[0],move[1])
+                    else:
+                        gamecopy.move(move[0],move[1])
         else:
             # larger = 1
             # if game.dice[0] > game.dice[1]:
@@ -512,13 +529,37 @@ class GameNode(Node):
             move = self.choose_move(gamecopy, moves)
             if move is not None:
                 final_moves.append(move)
-                gamecopy.move(move[0],move[1])
+                if move[0] == 24: # off bar
+                    if np.sign(gamecopy.state[move[0]][0]) != np.sign(gamecopy.state[move[1]]) and gamecopy.state[move[1]] != 0:
+                        # hit off bar
+                        gamecopy.move(move[1],bar)
+                        gamecopy.move(move[0],move[1])
+                    else:
+                        gamecopy.move(move[0],move[1]) # bar to chosen (not a hit)
+                elif np.sign(gamecopy.state[move[0]]) != np.sign(gamecopy.state[move[1]]) and gamecopy.state[move[1]] != 0:
+                    # normal hit
+                    gamecopy.move(move[1],bar)
+                    gamecopy.move(move[0],move[1])
+                else:
+                    gamecopy.move(move[0],move[1])
                 
             moves = gamecopy.possible_moves(game.dice[1])
             move = self.choose_move(gamecopy, moves)
             if move is not None:
                 final_moves.append(move)
-                gamecopy.move(move[0],move[1])
+                if move[0] == 24: # off bar
+                    if np.sign(gamecopy.state[move[0]][0]) != np.sign(gamecopy.state[move[1]]) and gamecopy.state[move[1]] != 0:
+                        # hit off bar
+                        gamecopy.move(move[1],bar)
+                        gamecopy.move(move[0],move[1])
+                    else:
+                        gamecopy.move(move[0],move[1])
+                elif np.sign(gamecopy.state[move[0]]) != np.sign(gamecopy.state[move[1]]) and gamecopy.state[move[1]] != 0:
+                    # normal hit
+                    gamecopy.move(move[1],bar)
+                    gamecopy.move(move[0],move[1])
+                else:
+                    gamecopy.move(move[0],move[1])
 
             #print("Moves in handle turn:", final_moves)
 
@@ -550,7 +591,10 @@ class GameNode(Node):
         # When the position is the bar
             
         if not sorted_positions: # if an empty row because we moved a checker into a place where there was previosly 0
-                        return self.grid_centers[row][5 - (repeat-1)]
+            # catching two different situations:
+            # 1. in a hit
+            # 2. consecutive moves: 
+            return self.grid_centers[row][5 - repeat] # be aware this may not work in both situations?
         
         return sorted_positions[repeat]
     
@@ -614,6 +658,8 @@ class Game:
             elif self.state[point2] == -1:
                 if point1 != 24:
                     self.state[point1] -= 1
+                else:
+                    self.state[24][0] -= 1
                 self.state[point2] = 1
                 self.state[24][1] += 1
         # The move turn of player Two
@@ -627,6 +673,8 @@ class Game:
             elif self.state[point2] == 1:
                 if point1 != 24:
                     self.state[point1] += 1
+                else:
+                    self.state[24][1] += 1
                 self.state[point2] = -1
                 self.state[24][0] += 1
 
@@ -656,14 +704,16 @@ class Game:
         moves = []
         #print("Moves at the beginning of possible moves")
         # Move off bar
-        if self.turn == 1 and self.state[24][0]:
+        if self.turn == 1 and self.state[24][0] > 0:
+            print('move off bar in possible moves')
+            print('self.state[24]',self.state[24])
             #print("In move off bar turn 1")
             for point in range(6):
                 if self.is_valid(24, point, die):
                     #print("Inside valid")
                     moves.append((24, point))
             return moves
-        elif self.turn == -1 and self.state[24][1]:
+        elif self.turn == -1 and self.state[24][1] < 0:
             #print("In move off bar turn -1 ")
             for point in range(18, 24):
                 if self.is_valid(24, point, die):
