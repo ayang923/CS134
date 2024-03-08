@@ -1,18 +1,15 @@
 # TODO: Finish fixing checker selection, ie making sure the robot does not try
 # to pick / place from the same row twice during a move.
+    # 3/8 Morning Update: seems to be mostly resolved
 # TODO: fix hardcoded placing positions (as good as we can)
+    # Still tbd
 # TODO: handle_turn() returning illegal sets of moves
+    # improvements over night into 3/8 but still not perfect, biggest issue is
+    # repeated moves off of the bar
 # TODO: (lower priority!) verify game.legal_states functionality
     # gunter said for now assume the opponent makes legal moves. Recognizing our own
     # gripping mistake / using tip camera to adjust our pointing is a more interesting challenge!
-# TODO: test publishing to /dice from terminal as an intermediary for dice detection
-# TODO: alter game state handling so we can play against the robot, have the
-# robot play as green, verify/test turn indicator handling
-    # 1. Handling GameNode.turn_signal (Boolean) in GameNode.determine_action to make
-    # sure we do not try to move when the turn signal is telling us it is not our
-    # turn.
-    # 2. When it is our turn, ensuring the last sent action is "move the turn signal
-    # from GameNode.turn_signal_pos to the other (hardcoded?) position"
+# TODO: incorporate ipad/device which reads dice topic to display roll
 # TODO: (lower!! priority) write and test GameNode.fix_board()
     # For now, fine to just have it print / log an error
 

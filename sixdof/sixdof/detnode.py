@@ -1,5 +1,15 @@
 # TODO: tweak hsv bounds so it can detect in shadows (especially for brown/purple)
-# TODO: (higher prio) add "fine adjustment" based on tip cam?
+# TODO: (higher prio) add "fine adjustment" based on tip cam!!
+    # notes from Gunter:
+    # go to where we think is above the checker
+    # wait for a new message from detector node with the below info:
+    # frame on camera in urdf
+    # fkin to camera to get camera position in xyz
+    # get coords of piece in camera coords
+    # vector comes out of the camera at xbar,ybar,1
+    # 	^^ we need to do the checkerboard undistort line to do this
+    # using this info, "improve" the checker location, and then go to that location
+    # and THEN, go down to pick up the checker
 # TODO: (low prio) add textual indicator of whose turn it is
 
 import numpy as np
