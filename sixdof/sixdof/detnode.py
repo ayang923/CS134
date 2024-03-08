@@ -1,6 +1,5 @@
 # TODO: tweak hsv bounds so it can detect in shadows (especially for brown/purple)
-# TODO: verify turn signal detect / publish functionality (DetectorNode.detect_turn_signal()
-# and DetectorNode.publish_turn_signal())
+# TODO: (low prio) add textual indicator of whose turn it is
 
 import numpy as np
 import rclpy
@@ -114,14 +113,14 @@ class DetectorNode(Node):
 
         self.detect_checkers(frame, Color.GREEN)
         self.detect_checkers(frame, Color.BROWN)
-        #self.detect_turn_signal(frame)
+        self.detect_turn_signal(frame)
         self.update_occupancy()
 
         ####### Comment out for better performance without viz #######
         self.draw_best_board() # draws current best board in uv on self.rgb
         self.draw_checkers() # draws filtered checker locations
         self.draw_buckets() # draws current bucket knowledge on self.rgb 
-        #self.draw_turn_signal()
+        self.draw_turn_signal()
 
         self.publish_rgb()
         ###############################################################
@@ -277,7 +276,7 @@ class DetectorNode(Node):
         ###################################################################
 
     def detect_turn_signal(self,frame):
-        # TODO
+        # Tested!
         if self.board_mask_uv is None:
             return None
 
@@ -288,16 +287,22 @@ class DetectorNode(Node):
 
         binary = cv2.inRange(hsv, limits[:, 0], limits[:, 1])
 
-        binary = cv2.bitwise_and(binary, binary, mask=cv2.bitwise_not(self.board_mask_uv))
+        turn_msk = np.zeros(binary.shape)
+        [umin_turn, umax_turn] = [0, 100]
+        [vmin_turn, vmax_turn] = [230, 500]
+        turn_msk[vmin_turn:vmax_turn, umin_turn:umax_turn] = 1
+        turn_msk = np.int8(np.array(turn_msk, dtype=np.float32)*255)
+
+        binary = cv2.bitwise_and(binary, binary, mask=turn_msk)
         
-        #binary = cv2.dilate(binary, None, iterations=2)
+        binary = cv2.erode(binary, None, iterations=4)
+        binary = cv2.dilate(binary, None, iterations=3)
         binary = cv2.erode(binary, None, iterations=3)
         binary = cv2.dilate(binary, None, iterations=3)
         #binary = cv2.erode(binary, None, iterations=3)
-        #binary = cv2.erode(binary, None, iterations=3)
 
         circles = cv2.HoughCircles(binary, cv2.HOUGH_GRADIENT, dp=1, minDist=27,
-                                   param1=7, param2=10, minRadius=12, maxRadius=17)
+                                   param1=7, param2=6, minRadius=12, maxRadius=17)
 
         turnsignal = []
         if circles is not None and len(circles[0]) == 1:
@@ -314,12 +319,12 @@ class DetectorNode(Node):
                     self.turn_signal_belief = [[pos,0] for pos in turnsignal]
         else:
             self.turn_signal_belief = correspondence(turnsignal, self.turn_signal_belief)
-            positions = np.array([group[0] for group in self.turn_signal_belief if group[1] > 2])
+            positions = np.array([group[0] for group in self.turn_signal_belief if group[1] > 1.5])
             if len(positions) == 1:
                 self.publish_turn_signal(positions[0])
 
-        cv2.imshow('turnsignal', binary)
-        cv2.waitKey(1)
+        #cv2.imshow('turnsignal', binary)
+        #cv2.waitKey(1)
         return None
 
     def update_centers(self):
@@ -442,14 +447,17 @@ class DetectorNode(Node):
                         cv2.circle(self.rgb, np.int0(np.array([u,v])), radius=15, color=(0,255,0), thickness=3)
 
     def draw_turn_signal(self):
+        # Tested!
+        # TODO: (low prio) add textual indicator of whose turn it is
         if self.turn_signal_belief is not None:
-            if len(self.turn_signal_belief) == 1:
-                if self.turn_signal_belief[0][1] > 1.5:
-                    [x,y] = self.turn_signal_belief[0][0]
-                    uv = xyToUV(self.Minv,x,y)
-                    if uv is not None:
-                        [u,v] = uv
-                        cv2.circle(self.rgb, np.int0(np.array([u,v])), radius=15, color=(156,87,255), thickness=3)
+            choice = [ind for ind in self.turn_signal_belief if ind[1] > 1.5]
+            if len(choice) == 1:
+                draw = choice[0]
+                [x,y] = draw[0]
+                uv = xyToUV(self.Minv,x,y)
+                if uv is not None:
+                    [u,v] = uv
+                    cv2.circle(self.rgb, np.int0(np.array([u,v])), radius=15, color=(156,87,255), thickness=3)
 
     def draw_buckets(self):
         if self.best_board_xy[0] is None:
@@ -613,15 +621,17 @@ class DetectorNode(Node):
 # helper functions
         
 EXIST = 0.3
-CLEAR = -0.15
+CLEAR = -0.3
 
 def correspondence(new, old):
     '''
     new are the freshly detected positions
     old is a list of [[position, log-odds]]
+    Tested!!
     '''
     alpha = 0.2
     updated = old.copy()
+    new_detections = []
     persisting = np.zeros(len(updated)) # flag whether object in old was detected again
     corresp_ids = np.zeros(len(updated))
     i = 0
@@ -636,7 +646,7 @@ def correspondence(new, old):
                 found = True
             j += 1
         if not found: # if the detected position is not close to any existing objects
-            updated.append([pos,0]) # add to updated with 50/50 chance of existence
+            new_detections.append([pos,0]) # add to updated with 50/50 chance of existence
         i += 1
     for i in range(len(persisting)):
         if persisting[i] == 0: # if not detected in the most recent frame
@@ -650,8 +660,10 @@ def correspondence(new, old):
     for i in range(len(persisting)):
         if old[i][1] > -0.5: # get rid of anything that has a low chance of existing
             final.append(updated[i])
+    for newpiece in new_detections:
+        final.append(newpiece)
 
-    return updated
+    return final
             
 
 

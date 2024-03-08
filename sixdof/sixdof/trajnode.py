@@ -65,7 +65,7 @@ class TrajectoryNode(Node):
         self.start_time = 1e-9 * self.get_clock().now().nanoseconds
 
         # every 5s, check to see if queue is empty and we need a new move
-        self.check_queue_timer = self.create_timer(5, self.check_queue)
+        self.check_queue_timer = self.create_timer(3, self.check_queue)
 
     def test(self, source_pos, dest_pos):
         self.task_handler.move_checker(source_pos, dest_pos)

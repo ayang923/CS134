@@ -279,8 +279,8 @@ class TaskHandler():
         dest_pos_angles = np.array([-np.pi / 2, 0.2+float(np.arctan2(-(dest_pos[0]-robotx), dest_pos[1]-roboty))]).reshape(-1, 1)
         dest_pos = np.vstack((dest_pos_xyz, dest_pos_angles))
         
-        self.node.get_logger().info("given source: " + str(source_pos))
-        self.node.get_logger().info("given dest: " + str(dest_pos))
+        #self.node.get_logger().info("given source: " + str(source_pos))
+        #self.node.get_logger().info("given dest: " + str(dest_pos))
 
         # Queue Trajectories
         # Joint spline to 10cm above pick checker
