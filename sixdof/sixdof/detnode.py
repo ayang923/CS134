@@ -2,7 +2,10 @@
 # TODO: (higher prio) add "fine adjustment" based on tip cam!!
     # notes from Gunter:
     # go to where we think is above the checker
-    # wait for a new message from detector node with the below info:
+    # MAKE SURE WRIST ROLL LOCKED @ np.pi/2 = aligned so camera can see
+    # tell trajnode to WAIT until:
+    # new message from detector node with adjustment command
+    # How to determine adjustment command:
     # frame on camera in urdf
     # fkin to camera to get camera position in xyz
     # get coords of piece in camera coords
@@ -31,6 +34,9 @@ BROWN_CHECKER_LIMITS = np.array(([100, 150], [20, 75], [70, 180]))
 YELLOW_BOARD_LIMITS = np.array([[80, 120], [100, 220], [150, 180]])
 RED_BOARD_LIMITS = np.array([[100, 140], [160, 240], [100, 180]])
 BLUE_BOARD_LIMITS = np.array([[0, 40],[90, 140],[100, 190]])
+
+TIP_LIMITS = np.array(([95, 135], [50, 130], [70, 180]))
+
 
 class DetectorNode(Node):
     def __init__(self, name):
@@ -71,6 +77,7 @@ class DetectorNode(Node):
                                                     '/usb_cam/brown_checker_binary', 3)
         
         self.pub_markup = self.create_publisher(Image,'/usb_cam/markup',3)
+        self.pub_tip_markup = self.create_publisher(Image, 'tip_cam/markup', 3)
 
         self.bridge = cv_bridge.CvBridge()
 
@@ -78,6 +85,7 @@ class DetectorNode(Node):
         self.Minv = None
 
         self.rgb = None
+        self.tip_rgb = None
 
         # x,y of aruco tag rectangle's center
         self.x0 = 0.77875
@@ -138,7 +146,60 @@ class DetectorNode(Node):
 
     def process_tip_images(self, msg):
         # TODO
-        pass
+        # for now, just imshow and save the image
+
+        # Confirm the encoding and report.
+        assert(msg.encoding == "rgb8")
+
+        # Convert into OpenCV image, using RGB 8-bit (pass-through).
+        frame = self.bridge.imgmsg_to_cv2(msg, "passthrough")
+
+        self.tip_detect(frame)
+
+        blurred = cv2.GaussianBlur(frame, (5, 5), 0)
+        self.tip_img = blurred
+
+        self.tip_rgb = cv2.cvtColor(self.tip_img, cv2.COLOR_BGR2RGB)
+
+        self.tip_detect(frame)
+
+        self.publish_rgb()
+
+        #cv2.imshow('tip', self.tip_rgb)
+        #cv2.waitKey(1)
+
+    def tip_detect(self,frame):
+        blurred = cv2.GaussianBlur(frame, (5, 5), 0)
+        hsv = cv2.cvtColor(blurred, cv2.COLOR_RGB2HSV)  # NB!!!! RGB FOR TIPCAM BECAUSE PURPLE NEAR BGR2HSV WRAP
+
+        binary = cv2.inRange(hsv, TIP_LIMITS[:,0],
+                                   TIP_LIMITS[:,1])
+        
+        binary = cv2.erode(binary, None, iterations=3)
+        
+        circles = cv2.HoughCircles(binary, cv2.HOUGH_GRADIENT, dp=1, minDist=80,
+                                   param1=10, param2=10, minRadius=40, maxRadius=80)
+        
+        # Ensure circles were found
+        checkers = []   
+        if circles is not None:
+            circles = np.round(circles[0, :]).astype("int")
+    
+            # Draw the circles on the original image
+            for (u, v, r) in circles:
+                cv2.circle(self.tip_rgb, np.int0(np.array([u,v])), r, color=(0,0,255), thickness=3)
+                #xy = uvToXY(self.M, int(u), int(v))
+                #if xy is not None:
+                    #[x, y] = xy
+                    #checkers.append([x, y])
+            #checkers = np.array(checkers)
+        else:
+            pass
+            #self.get_logger().info("No circles detected in tip cam image")
+
+        #cv2.imshow('inranges',binary)
+        #cv2.waitKey(1)
+
 
     def detect_board(self,frame):
         blurred = cv2.GaussianBlur(frame, (5, 5), 0)
@@ -184,36 +245,49 @@ class DetectorNode(Node):
             
             # get min area rect in xy
             try: 
-                bound = cv2.minAreaRect(contour_xy)
+                raw_bound = cv2.minAreaRect(contour_xy)
             except:
-                #print('convexhull error')
                 return None
 
             # filter
+            if raw_bound[1][0] < raw_bound[1][1]:
+                WH = (raw_bound[1][1],raw_bound[1][0])
+                angle = raw_bound[2] - 90
+                bound = (raw_bound[0], WH, angle)
+            else:
+                bound = raw_bound
+
+            # self.get_logger().info("detected center xy" + str(bound[0]))
+            # self.get_logger().info("W H" + str(bound[1]))
+            # self.get_logger().info("detected area" + str(bound[1][0]*bound[1][1]))
+            # self.get_logger().info("area check" + str(abs(self.best_board_xy[1][0]*self.best_board_xy[1][1] - 
+            #                                               bound[1][0]*bound[1][1]) < 0.05))
+            # self.get_logger().info("detected angle" + str(bound[2]))
             if (abs(bound[2] - self.best_board_xy[2]) < 25 and # not a bad angle
-                abs(self.best_board_xy[1][0]*self.best_board_xy[1][1] - 
-                    bound[1][0]*bound[1][1]) < 0.05 and 
-                    abs(bound[0][0] - self.x0) < 0.4): # not covered -> bad area
+                abs(self.best_board_xy[1][0]*self.best_board_xy[1][1] -
+                    bound[1][0]*bound[1][1]) < 0.05 and # not covered -> bad area
+                    bound[1][0] > bound[1][1] and
+                    abs(bound[0][0] - self.x0) < 0.2):
                 alpha = 0.1
                 self.best_board_xy = (
                 bound[0] if self.best_board_xy[0] is None else alpha * np.array(bound[0]) + (1 - alpha) * np.array(self.best_board_xy[0]),
                 alpha * np.array(bound[1]) + (1 - alpha) * np.array(self.best_board_xy[1]),
                 alpha * bound[2] + (1 - alpha) * self.best_board_xy[2])
           
-            # get filtered fit rect from xy in uv space
-            rect_uv = []
-            for xy in cv2.boxPoints(self.best_board_xy):
-                x = xy[0]
-                y = xy[1]
-                uv = xyToUV(self.Minv,x,y)
-                if uv is not None:
-                    [u, v] = uv
-                    rect_uv.append([int(u),int(v)])
-            if rect_uv is not [] and len(rect_uv) == 4:
-                self.best_board_uv = np.array(rect_uv)
-                board_msk = np.zeros(binary_board.shape)
-                rect_uv = np.int0(np.array(rect_uv, dtype=np.float32))
-                self.board_mask_uv = np.uint8(cv2.drawContours(board_msk,[rect_uv],0,255,-1))
+                # get filtered fit rect from xy in uv space
+                rect_uv = []
+                for xy in cv2.boxPoints(self.best_board_xy):
+                    x = xy[0]
+                    y = xy[1]
+                    uv = xyToUV(self.Minv,x,y)
+                    if uv is not None:
+                        [u, v] = uv
+                        rect_uv.append([int(u),int(v)])
+                if rect_uv is not [] and len(rect_uv) == 4:
+                    self.best_board_uv = np.array(rect_uv)
+                    board_msk = np.zeros(binary_board.shape)
+                    rect_uv = np.int0(np.array(rect_uv, dtype=np.float32))
+                    self.board_mask_uv = np.uint8(cv2.drawContours(board_msk,[rect_uv],0,255,-1))
 
         self.update_centers()
 
@@ -547,17 +621,36 @@ class DetectorNode(Node):
         self.pub_turn_signal.publish(msg)
 
     def publish_rgb(self):
-            (H, W, D) = self.rgb.shape
-            uc = W//2
-            vc = H//2
+            # publish both the tip image and the top image, marked up
+            
+            if self.rgb is not None:
+                (H, W, D) = self.rgb.shape
+                uc = W//2
+                vc = H//2
 
-            #self.get_logger().info(
-            #    "Center pixel HSV = (%3d, %3d, %3d)" % tuple(hsv[vc, uc]))
+                #self.get_logger().info(
+                #    "Center pixel HSV = (%3d, %3d, %3d)" % tuple(hsv[vc, uc]))
+                
+                cv2.line(self.rgb, (uc - 10, vc), (uc + 10, vc), (0, 0, 0), 2)
+                cv2.line(self.rgb, (uc, vc - 7), (uc, vc + 8), (0, 0, 0), 2)
+
+                self.pub_markup.publish(self.bridge.cv2_to_imgmsg(self.rgb, "bgr8"))
+
+            if self.tip_rgb is not None:
+                (H, W, D) = self.tip_rgb.shape
+                uc = W//2
+                vc = H//2
+
+                hsv = cv2.cvtColor(self.tip_img, cv2.COLOR_RGB2HSV)  # NB!!!! RGB FOR TIPCAM BECAUSE PURPLE NEAR BGR2HSV WRAP
+
+                #self.get_logger().info(
+                #    "Tip Center pixel HSV = (%3d, %3d, %3d)" % tuple(hsv[vc, uc]))
+                
+                cv2.line(self.tip_rgb, (uc - 50, vc), (uc + 50, vc), (0, 0, 0), 2)
+                cv2.line(self.tip_rgb, (uc, vc - 50), (uc, vc + 50), (0, 0, 0), 2)
+                
+                self.pub_tip_markup.publish(self.bridge.cv2_to_imgmsg(self.tip_rgb, "bgr8"))
             
-            cv2.line(self.rgb, (uc - 10, vc), (uc + 10, vc), (0, 0, 0), 2)
-            cv2.line(self.rgb, (uc, vc - 7), (uc, vc + 8), (0, 0, 0), 2)
-            
-            self.pub_markup.publish(self.bridge.cv2_to_imgmsg(self.rgb, "bgr8"))
 
     def publish_board_pose(self):
         '''

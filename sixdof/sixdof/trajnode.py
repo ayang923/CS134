@@ -73,6 +73,11 @@ class TrajectoryNode(Node):
     # Called repeatedly by incoming messages - do nothing for now
     def recvfbk(self, fbkmsg):
         self.actpos = list(fbkmsg.position)
+        #self.get_logger().info("gripper pos " + str(self.actpos[5]))
+        # self.get_logger().info("The angle of the gripper motor:" + str(self.actpos[5]))
+        if self.actpos[5] <= -0.585:# and self.task_handler.curr_task_type == Tasks.WAIT:
+            self.task_handler.clear()
+
 
     def rcvaction(self, msg):
         if type(msg) is Bool:
@@ -80,10 +85,7 @@ class TrajectoryNode(Node):
                 self.task_handler.clear()
         elif type(msg) is PoseArray:
             if len(msg.poses) == 2:
-                action = []
-                for pose in msg.poses:
-                    p = p_from_T(T_from_Pose(pose))
-                    action.append([p[0],p[1]])              
+                action = [p_from_T(T_from_Pose(pose))[:2] for pose in msg.poses]          
                 self.task_handler.move_checker(action[0],action[1]) # (source, dest)
             else:
                 pass
@@ -159,8 +161,8 @@ class TrajectoryNode(Node):
         return (q, qdot)
     
     def gravitycomp(self, q):
-        tau_elbow = -6.3 * np.sin(-q[1] + q[2])
-        tau_shoulder = -tau_elbow + 9.5 * np.sin(-q[1])
+        tau_elbow = -6 * np.sin(-q[1] + q[2]) - 0.3
+        tau_shoulder = -tau_elbow + 8.8 * np.sin(-q[1])
         return (tau_shoulder, tau_elbow)
 
     # Send a command - called repeatedly by the timer.
@@ -170,7 +172,7 @@ class TrajectoryNode(Node):
         (tau_shoulder, tau_elbow) = self.gravitycomp(self.actpos)
         self.cmdmsg.header.stamp = self.get_clock().now().to_msg()
         self.cmdmsg.name         = self.jointnames
-        #self.cmdmsg.position     = [nan, nan, nan, nan, nan, nan] # uncomment for gravity comp test
+        #self.cmdmsg.position     = [nan, nan, nan, nan, np.pi/2, nan] # uncomment for gravity comp test
         #self.cmdmsg.velocity     = [nan, nan, nan, nan, nan, nan]
         self.cmdmsg.position     = q # comment for gravity comp
         self.cmdmsg.velocity     = qdot

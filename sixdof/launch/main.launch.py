@@ -142,5 +142,5 @@ def generate_launch_description():
         node_hebi,
         node_det,
         node_game,
-        node_traj
+        node_traj,
     ])

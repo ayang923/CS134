@@ -15,16 +15,21 @@ from enum import Enum
 import numpy as np
 from scipy.linalg import diagsvd
 
+import copy
+
 JOINT_NAMES = ['base', 'shoulder', 'elbow', 'wristpitch', 'wristroll', 'grip']
+
+BOARD_HEIGHT = 0.005
+GRIPPER_OFFSET = 0.14
 
 J_EULER = np.array([[0, 1, -1, 1, 0],[0, 0, 0, 0, 1]]).reshape(2,5) # xdot4 = qdot4 / x4 = q4
 
 RIGHT_SIDE_JOINT_ANGLES = np.array([])
 LEFT_SIDE_JOINT_ANGLES = np.array([])
 
-GRIP_OPEN = -0.2
+GRIP_OPEN = -0.3
 GRIP_DIE = -0.6
-GRIP_CHECKER = -0.6
+GRIP_CHECKER = -0.8
 GRIP_CUP = -0.45
 
 def alpha(q): # letting alpha = 0 be "level with table"
@@ -38,6 +43,7 @@ class Tasks(Enum):
     JOINT_SPLINE = 2
     TASK_SPLINE = 3
     GRIP = 4
+    WAIT = 5
 
 class GamePiece(Enum):
     CHECKER = 1
@@ -141,7 +147,20 @@ class TaskSplineTask(TaskObject):
             self.done = True
 
         return np.vstack((q,self.q0[5])), np.vstack((qdot,np.zeros((1,1))))
+
+class WaitTask(TaskObject):
+    def __init__(self, start_time, task_manager, T=3.0):
+        super().__init__(start_time, task_manager)
+        self.T = T
     
+    def evaluate(self, t, dt):
+        t = t - self.start_time - dt
+        if t < self.T:
+            return self.q0, np.zeros((6, 1))
+        else:
+            self.done = True
+            return self.q0, np.zeros((6, 1))
+  
 class JointSplineTask(TaskObject):
     def __init__(self, start_time, task_manager, x_final, T=3.0):
         super().__init__(start_time, task_manager)
@@ -216,6 +235,8 @@ class TaskHandler():
         self.p, self.R, _, _ = self.chain.fkin(self.q[:5])
         self.p = np.vstack((self.p, alpha(self.q), beta(self.q), self.q[5]))
 
+        self.clearing = False
+
     def add_state(self, task_type, **kwargs):
         self.tasks.append((task_type, kwargs))
     
@@ -225,6 +246,8 @@ class TaskHandler():
         elif (self.curr_task_object is None or self.curr_task_object.done) and len(self.tasks) != 0:
             new_task_type, new_task_data = self.tasks.pop(0)
             self.set_state(new_task_type, t, **new_task_data)
+        elif self.curr_task_object.done and len(self.tasks) == 0:
+            self.clearing = False
         #elif (self.curr_task_type is not Tasks.INIT and len(self.tasks) == 0 and self.curr_task_object.done):
         #    self.add_state(Tasks.INIT)
         
@@ -246,6 +269,8 @@ class TaskHandler():
             self.curr_task_object = TaskSplineTask(t, self, **kwargs)
         elif task_type == Tasks.GRIP:
             self.curr_task_object = GripperTask(t, self, **kwargs)
+        elif task_type == Tasks.WAIT:
+            self.curr_task_object = WaitTask(t, self, **kwargs)
     
     def get_evaluator(self):
         return self.state_object.evaluate
@@ -253,7 +278,13 @@ class TaskHandler():
     # Macro Add Behavior Functions
 
     def clear(self):
-        self.tasks = [InitTask]
+        if not self.clearing:
+            self.tasks = []
+            self.add_state(Tasks.INIT)
+            self.add_state(Tasks.GRIP, grip=False)
+            self.curr_task_object.done = True
+
+            self.clearing = True
 
     def move_checker(self, source_pos, dest_pos):
         '''
@@ -270,12 +301,13 @@ class TaskHandler():
         # FIXME Known Issue: ensuring the wrist is always parallel to
         # the long axis of the table for picking/placing is not working!
         # The last item appended to source pos and dest pos below
-        source_pos_xyz = np.vstack((source_pos + np.array([0.01, 0]).reshape(-1, 1), np.array([[0.00005]]).reshape(-1,1)))
+        source_pos_xyz = np.vstack((source_pos + np.array([0.01, 0]).reshape(-1, 1), np.array([[GRIPPER_OFFSET + BOARD_HEIGHT]]).reshape(-1,1)))
         source_pos_angles = np.array([-np.pi / 2, 0.2+float(np.arctan2(-(source_pos[0]-robotx), source_pos[1]-roboty))]).reshape(-1, 1)
         source_pos = np.vstack((source_pos_xyz, source_pos_angles))
         above_source_pos = source_pos+np.array([0, 0, 0.1, 0, 0]).reshape(-1, 1)
+        #above_source_pos[4] = np.pi/2        
 
-        dest_pos_xyz = np.vstack((dest_pos, np.array([[0.05]]).reshape(-1,1)))
+        dest_pos_xyz = np.vstack((dest_pos, np.array([[GRIPPER_OFFSET + 0.03 + BOARD_HEIGHT]]).reshape(-1,1)))
         dest_pos_angles = np.array([-np.pi / 2, 0.2+float(np.arctan2(-(dest_pos[0]-robotx), dest_pos[1]-roboty))]).reshape(-1, 1)
         dest_pos = np.vstack((dest_pos_xyz, dest_pos_angles))
         
@@ -285,13 +317,16 @@ class TaskHandler():
         # Queue Trajectories
         # Joint spline to 10cm above pick checker
         #self.add_state(Tasks.JOINT_SPLINE, x_final=above_source_pos, T=5)
-        self.add_state(Tasks.TASK_SPLINE, x_final=above_source_pos, T=5)
+        self.add_state(Tasks.TASK_SPLINE, x_final=above_source_pos, T=5) # FIXME this is the buggy one
+        # uncomment for debug
+        #self.add_state(Tasks.TASK_SPLINE, x_final=above_source_pos, T=20)
         # Task spline to pick checker
         self.add_state(Tasks.TASK_SPLINE, x_final=source_pos, T=2)
         # Grip checker
         self.add_state(Tasks.GRIP, grip=True)
         # Task spline to pull up from checker
         self.add_state(Tasks.TASK_SPLINE, x_final=above_source_pos, T=2)
+        self.add_state(Tasks.WAIT, T=1)
         # uncomment for debug
         #self.add_state(Tasks.TASK_SPLINE, x_final=above_source_pos, T=20)
         # Joint spline to destination

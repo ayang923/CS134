@@ -20,7 +20,11 @@ from enum import Enum
 
 from rclpy.node         import Node
 
+import rclpy
 import numpy as np
+from sensor_msgs.msg    import Image
+from cv_bridge          import CvBridge
+import cv2
 import random
 
 from sixdof.utils.TransformHelpers import *
@@ -28,6 +32,8 @@ from sixdof.utils.TransformHelpers import *
 from sixdof.states import *
 
 import copy
+
+
 
 class Color(Enum):
     GREEN = 1
@@ -56,6 +62,8 @@ class GameNode(Node):
         
         self.sub_moveready = self.create_subscription(Bool, '/move_ready',
                                                       self.raise_determine_action_flag, 1)
+
+        self.robot_move_sub = self.create_subscription(UInt8MultiArray, '/hardcode_robot_move', self.hardcode_move, 3)
         
         self.sub_turn = self.create_subscription(Pose, '/turn', self.save_turn, 10)
 
@@ -66,6 +74,9 @@ class GameNode(Node):
         self.pub_clear = self.create_publisher(Bool, '/clear', 10)
         self.pub_checker_move = self.create_publisher(PoseArray, '/checker_move', 10)
         self.pub_dice_roll = self.create_publisher(PoseArray, '/dice_roll', 10)
+        self.dice_publisher = self.create_publisher(Image, 'dice_roll_image', 10)
+        self.dice_image_timer = self.create_timer(5, self.publish_dice_roll)
+        self.bridge = CvBridge()
 
         # Physical Game Board Info
         self.board_x = None
@@ -94,7 +105,7 @@ class GameNode(Node):
         # self.recvbrown populates these arrays with detected brown checker pos
         self.brownpos = None
         # self.recvdice populates this with detected [die1_int, die2_int]
-        #self.dice = []
+        self.dice = []
         # self.save turn populates this with turn indicator position
         self.turn_signal_pos = None
         self.turn_signal_dest = [0.20,0.33]
@@ -113,6 +124,13 @@ class GameNode(Node):
         # Game engine
         self.game = Game(self.gamestate)
 
+    def hardcode_move(self, msg):
+        self.raise_determine_action_flag = False
+        source, dest = msg.data[0], msg.data[1]
+
+        self.execute_normal(source, dest)
+
+        
     def recvboard(self, msg):
         '''
         create / update belief of where the boards are based on most recent
@@ -186,7 +204,21 @@ class GameNode(Node):
         self.board_theta = t
 
     def raise_determine_action_flag(self, msg:Bool):
-        self.determine_action_flag = msg.data
+        # for hardcoded
+        self.determine_action_flag = False
+        #self.determine_action_flag = msg.data
+
+    def publish_dice_roll(self):
+        width, height = 640, 480
+        dice_img = np.zeros((height, width, 3), dtype=np.uint8)
+        font_scale = 10.0
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        if self.game.dice is not None:
+            dice_roll = str(self.game.dice[0]) + ',' + str(self.game.dice[1])
+            cv2.putText(dice_img, dice_roll, (50, 300), font, font_scale, (255, 255, 255), 6, cv2.LINE_AA)
+
+        dice__roll_image = self.bridge.cv2_to_imgmsg(dice_img, encoding='bgr8')
+        self.dice_publisher.publish(dice__roll_image)
 
     def update_centers(self):
         centers = np.zeros((25,2))
@@ -357,6 +389,8 @@ class GameNode(Node):
 
         #self.get_logger().info('determine action running')
         
+        # self publish robot moves for debugging
+
         if self.turn_signal: # checks whether it is our turn
             self.get_logger().info("Robot (Green) Turn!")
             #Stops sending action commands with determine action after received an action
@@ -455,7 +489,7 @@ class GameNode(Node):
     
     def execute_hit(self, source, dest):
         # self.game.turn == 1 during robot (green) turn
-        turn = self.game.turn
+        turn = 1 if self.game.turn == 1 else 0
         bar = 24
         
         dest_centers = self.grid_centers[dest]
@@ -499,32 +533,39 @@ class GameNode(Node):
         game.roll()
         final_moves = []
         #print(self.game.state)
+        #HANDLING DOUBLE ROLLS
         if game.dice[0] == game.dice[1]:
             for _ in range(4):
                 moves = gamecopy.possible_moves(game.dice[0])
                 move = self.choose_move(gamecopy, moves)
                 if move is not None:
                     final_moves.append(move)
-                    if move[0] == 24: # off bar
+                    # Moving off the bar
+                    if move[0] == 24 and move[1] !=24: # off bar
                         if np.sign(gamecopy.state[move[0]][0]) != np.sign(gamecopy.state[move[1]]) and gamecopy.state[move[1]] != 0:
-                            # hit off bar
+                            # hiting while moving off bar
                             gamecopy.move(move[1],bar)
                             gamecopy.move(move[0],move[1])
                         else:
+                            # just a normal moving of the bar
                             gamecopy.move(move[0],move[1])
+                    # Executing a hit 
                     elif np.sign(gamecopy.state[move[0]]) != np.sign(gamecopy.state[move[1]]) and gamecopy.state[move[1]] != 0:
                         # normal hit
                         gamecopy.move(move[1],bar)
                         gamecopy.move(move[0],move[1])
+                    # Executing a normal move
                     else:
                         gamecopy.move(move[0],move[1])
+        #HANDLING SINGLE ROLLS
         else:
             # larger = 1
             # if game.dice[0] > game.dice[1]:
             #     larger = 0
             moves = gamecopy.possible_moves(game.dice[0])
-            move = self.choose_move(gamecopy, moves)
-            if move is not None:
+            move1 = self.choose_move(gamecopy, moves)
+            if move1 is not None:
+                move = move1
                 final_moves.append(move)
                 if move[0] == 24: # off bar
                     if np.sign(gamecopy.state[move[0]][0]) != np.sign(gamecopy.state[move[1]]) and gamecopy.state[move[1]] != 0:
@@ -557,6 +598,27 @@ class GameNode(Node):
                     gamecopy.move(move[0],move[1])
                 else:
                     gamecopy.move(move[0],move[1])
+                if move1 is None:
+                    moves = gamecopy.possible_moves(game.dice[0])
+                    move1 = self.choose_move(gamecopy, moves)
+                    # Trying to find if there is another move possible
+                    if move1 is not None:
+                        move = move1
+                        final_moves.append(move)
+                        if move[0] == 24: # off bar
+                            if np.sign(gamecopy.state[move[0]][0]) != np.sign(gamecopy.state[move[1]]) and gamecopy.state[move[1]] != 0:
+                                # hit off bar
+                                gamecopy.move(move[1],bar)
+                                gamecopy.move(move[0],move[1])
+                            else:
+                                gamecopy.move(move[0],move[1]) # bar to chosen (not a hit)
+                        elif np.sign(gamecopy.state[move[0]]) != np.sign(gamecopy.state[move[1]]) and gamecopy.state[move[1]] != 0:
+                            # normal hit
+                            gamecopy.move(move[1],bar)
+                            gamecopy.move(move[0],move[1])
+                        else:
+                            gamecopy.move(move[0],move[1])
+
 
             #print("Moves in handle turn:", final_moves)
 
@@ -577,14 +639,14 @@ class GameNode(Node):
         Repeat shoudl be set to zero if the row is not accessed more then
         once in one players turn
         '''
-        #self.get_logger().info('checker locations' + str(self.checker_locations))
+        self.get_logger().info('checker locations' + str(self.checker_locations[row][color]))
         if row <= 11:
             sorted_positions = sorted(self.checker_locations[row][color], key=lambda x: x[1])
         elif row <=24:
             sorted_positions = sorted(self.checker_locations[row][color], key=lambda x: x[1], reverse=True)
-        #self.get_logger().info("Repeat:"+str(repeat))
-        #self.get_logger().info("sorted_pos"+str(sorted_positions))
-        #self.get_logger().info("Choosen position:" + str(sorted_positions[repeat]))
+        self.get_logger().info("Repeat:"+str(repeat))
+        self.get_logger().info("sorted_pos"+str(sorted_positions))
+        self.get_logger().info("Choosen position:" + str(sorted_positions[repeat]))
         # When the position is the bar
             
         if not sorted_positions: # if an empty row because we moved a checker into a place where there was previosly 0
@@ -602,9 +664,6 @@ class GameNode(Node):
             R = Reye()
             msg.poses.append(Pose_from_T(T_from_Rp(R,p)))
         self.pub_checker_move.publish(msg)
-
-    def publish_dice_roll(self,source,dest):
-        pass
 
     def publish_clear(self):
         msg = Bool()
