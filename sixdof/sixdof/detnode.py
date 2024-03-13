@@ -426,7 +426,7 @@ class DetectorNode(Node):
         L = 1.061 # board length
         H = 0.536 # board width
         dL = 0.067 # triangle to triangle dist
-        dH = 0.040 # checker to checker stack dist
+        dH = 0.045 # checker to checker stack dist
 
         dL0 = 0.235 # gap from blue side to first triangle center
         dL1 = 0.117 - dL # gap between two sections of triangles (minus dL)

@@ -115,7 +115,8 @@ class GameNode(Node):
         self.out_of_place = False # raised if any checkers are outside of the row buckets
         self.turn_signal = True # constantly updated indication of who's move. True: robot, False:human
         self.firstmove = True # one-time make sure we move first, false otherwise
-        self.determine_action_flag = True # True if the robot is ready for new action, false after actions sent. /move_ready Bool sets to True again
+        self.determine_action_flag = False # True if the robot is ready for new action, false after actions sent. /move_ready Bool sets to True again
+        self.first_human_turn_report = False # logging flag
 
         # Source and destination info
         self.repeat_source = 0
@@ -125,7 +126,7 @@ class GameNode(Node):
         self.game = Game(self.gamestate)
 
     def hardcode_move(self, msg):
-        self.raise_determine_action_flag = False
+        self.determine_action_flag = False
         source, dest = msg.data[0], msg.data[1]
 
         self.execute_normal(source, dest)
@@ -204,10 +205,43 @@ class GameNode(Node):
         self.board_theta = t
 
     def raise_determine_action_flag(self, msg:Bool):
+        self.get_logger().info("After move game state " + str(self.game.state))
+
+        checkgame = Game(self.gamestate)
+        self.get_logger().info("After move actual state " + str(checkgame.state))
+        fixes = self.fix_board(checkgame.state, self.game.state)
+        self.get_logger().info("fixes " + str(fixes))
+        for fix in fixes:
+            self.execute_normal(fix[0], fix[1], change_game=False)
+            checkgame.set_state(self.gamestate)
+        self.get_logger().info("Expected state after fix: " + str(self.game.state))
         # for hardcoded
         self.determine_action_flag = False
         #self.determine_action_flag = msg.data
+    def fix_board(self, actual_state, expected_state):
+        green_incorrect = []
+        brown_incorrect = []
+        moves = []
 
+        for i, (triangle_actual, triangle_expected) in enumerate(zip(actual_state[:24], expected_state[:24])):
+            # print(triangle_actual)
+            # print(triangle_expected)
+            # print(i)
+            if triangle_actual != triangle_expected:
+                brown_actual = -triangle_actual if triangle_actual < 0 else 0
+                brown_expected = -triangle_expected if triangle_expected < 0 else 0
+                green_actual = triangle_actual if triangle_actual > 0 else 0
+                green_expected = triangle_expected if triangle_expected > 0 else 0
+
+                if green_actual != green_expected:
+                    delta_green = green_expected - green_actual
+                    if len(green_incorrect) != 0 and np.sign(delta_green) != np.sign(green_incorrect[-1]):
+                        for _ in range(abs(delta_green)):
+                            moves.append([i, abs(green_incorrect.pop(-1))-1] if np.sign(delta_green) == -1 else [abs(green_incorrect.pop(-1))-1, i])
+                    else:
+                        green_incorrect = [np.sign(delta_green)*(i+1)] * abs(delta_green) + green_incorrect
+        return moves
+    
     def publish_dice_roll(self):
         width, height = 640, 480
         dice_img = np.zeros((height, width, 3), dtype=np.uint8)
@@ -232,7 +266,7 @@ class GameNode(Node):
         L = 1.061 # board length
         H = 0.536 # board width
         dL = 0.067 # triangle to triangle dist
-        dH = 0.050 # checker to checker stack dist
+        dH = 0.045 # checker to checker stack dist
 
         dL0 = 0.235 # gap from blue side to first triangle center
         dL1 = 0.117 - dL # gap between two sections of triangles (minus dL)
@@ -392,13 +426,18 @@ class GameNode(Node):
         # self publish robot moves for debugging
 
         if self.turn_signal: # checks whether it is our turn
-            self.get_logger().info("Robot (Green) Turn!")
-            #Stops sending action commands with determine action after received an action
-            if not self.determine_action_flag:
-                self.get_logger().info('Already sent an action!')
+            if not self.first_human_turn_report:
+                self.get_logger().info("Robot (Green) Turn!")
+                #Stops sending action commands with determine action after received an action
+                self.first_human_turn_report = True
+            if not self.determine_action_flag: # only valid in non testing mode
+                # uncomment if running normal, comment if testing
+                # self.get_logger().info('Already sent an action!')
                 return None
         else:
-            self.get_logger().info("Human Turn!")
+            if self.first_human_turn_report:
+                self.get_logger().info("Human Turn!")
+                self.first_human_turn_report = False
             return None # comment out if having robot play against itself
 
         
@@ -410,8 +449,6 @@ class GameNode(Node):
                 self.firstmove = False
             
             self.game.set_state(self.gamestate) # update game.state
-            self.get_logger().info("Gamestate is:" + str(self.gamestate))
-            self.get_logger().info("Game state is" + str(self.game.state))
             moves = self.handle_turn(self.game) # roll dice and decide moves (with new gamestate)
             self.get_logger().info("After Handle Turn Game state is" + str(self.game.state))
 
@@ -463,9 +500,7 @@ class GameNode(Node):
 
         #self.get_logger().info("Gamestate:"+str(self.game.state))
     
-    def fix_board(self):
-        # TODO!!!
-        pass
+
     
     def execute_off_bar(self, dest):
         turn = 0 if self.game.turn == 1 else 1
@@ -508,12 +543,14 @@ class GameNode(Node):
 
         self.publish_checker_move(source_pos, dest_pos)
 
-    def execute_normal(self, source, dest):        
+    def execute_normal(self, source, dest, change_game=True):        
         turn = 0 if self.game.turn == 1 else 1
 
         source_pos = self.last_checker(source,turn,self.repeat_source)
         dest_pos = self.next_free_place(dest,turn,self.repeat_dest)
-        self.game.move(source,dest)
+
+        if change_game:
+            self.game.move(source,dest)
 
         self.publish_checker_move(source_pos, dest_pos)
     
@@ -627,10 +664,20 @@ class GameNode(Node):
     def next_free_place(self,row,color,repeat):
         # color is 0 or 1 for the turn, ie green 0 brown 1
         positions = self.grid_centers[row]
-        num_dest = self.gamestate[row][color] + repeat
-        if row == 24:
-            num_dest += self.gamestate[row][0 if color == 1 else 1]        
-        return positions[num_dest]
+        occupied_num = self.gamestate[row][color]
+        if row <= 11:
+            sign = -1
+        elif row <= 23:
+            sign = 1
+        else:
+            occupied_num += self.gamestate[row][0 if color == 1 else 1] # consider number of spots occupied by both green and purple
+            return positions[occupied_num + repeat]
+        if occupied_num == 0: # not currently occupied by any checkers
+            return positions[0]
+        else: # if row has a checker already, determine next position relative to the last
+            last = self.checker_locations[row][color][occupied_num - 1] # minus 1 to get correct index of last occupant
+            pos = [last[0], last[1] + (1 + repeat) * sign * 0.045] # 0.045 is intended distance between checker centers        
+            return pos
 
 
     def last_checker(self,row,color,repeat):
@@ -646,15 +693,14 @@ class GameNode(Node):
             sorted_positions = sorted(self.checker_locations[row][color], key=lambda x: x[1], reverse=True)
         self.get_logger().info("Repeat:"+str(repeat))
         self.get_logger().info("sorted_pos"+str(sorted_positions))
-        self.get_logger().info("Choosen position:" + str(sorted_positions[repeat]))
         # When the position is the bar
             
         if not sorted_positions: # if an empty row because we moved a checker into a place where there was previosly 0
             # catching two different situations:
             # 1. in a hit
             # 2. consecutive moves: 
-            return self.grid_centers[row][5 - repeat] # be aware this may not work in both situations?
-        
+            return self.grid_centers[row][repeat] # be aware this may not work in both situations?
+        self.get_logger().info("Choosen position:" + str(sorted_positions[repeat]))
         return sorted_positions[repeat]
     
     def publish_checker_move(self, source, dest):
