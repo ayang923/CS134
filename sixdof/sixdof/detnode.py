@@ -13,7 +13,11 @@ from std_msgs.msg       import UInt8MultiArray, Bool, Float32MultiArray
 
 from sixdof.utils.TransformHelpers import *
 
-from sixdof.gamenode import Color
+from enum import Enum
+
+class Color(Enum):
+    GREEN = 1
+    BROWN = 2
 
 GREEN_CHECKER_LIMITS = np.array(([30, 70], [25, 80], [30, 90]))
 BROWN_CHECKER_LIMITS = np.array(([100, 150], [20, 75], [70, 180]))
@@ -516,7 +520,8 @@ class DetectorNode(Node):
                     sorted = True
             if not sorted:
                 self.checker_locations[25][1].append(brown)
-        checker_msg = Float32MultiArray(data=list(flatten_list(self.checker_locations)))
+
+        checker_msg = Float32MultiArray(data=list(flatten_list(self.occupancy)))
         self.pub_checker_locations.publish(checker_msg)
 
         occupancy_msg = UInt8MultiArray(data=list(flatten_list(self.occupancy)))

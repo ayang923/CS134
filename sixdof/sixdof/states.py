@@ -160,10 +160,10 @@ class WiggleTask(TaskObject):
         # Pick the convergence bandwidth.
         self.lam = lam
 
-        self.x_L = self.p0 + np.array([-0.015, 0, -0.004, 0, 0]).reshape(-1,1)
-        self.x_Lh = self.p0 + np.array([-0.015, 0, 0.002, 0, 0]).reshape(-1,1)
-        self.x_R = self.p0 + np.array([0.015, 0, -0.008, 0, 0]).reshape(-1,1)
-        self.x_Rh = self.p0 + np.array([0.015, 0, 0.002, 0, 0]).reshape(-1,1)
+        self.x_L = self.p0 + np.array([-0.008, 0, -0.005, 0, 0]).reshape(-1,1)
+        self.x_Lh = self.p0 + np.array([-0.008, 0, 0.00, 0, 0]).reshape(-1,1)
+        self.x_R = self.p0 + np.array([0.008, 0, -0.005, 0, 0]).reshape(-1,1)
+        self.x_Rh = self.p0 + np.array([0.008, 0, 0.0, 0, 0]).reshape(-1,1)
         self.x_F = self.p0 + np.array([0, 0, 0.0, 0, 0]).reshape(-1,1)
 
         self.T = T
@@ -394,8 +394,8 @@ class TaskHandler():
         self.add_state(Tasks.TASK_SPLINE, x_final=source_pos, T=2)
         # wiggle
         #self.add_state(Tasks.WAIT, T=15)
-        self.add_state(Tasks.WIGGLE, T=3.0)
-        self.add_state(Tasks.WIGGLE, T=3.0)
+        self.add_state(Tasks.WIGGLE, T=2.0)
+        #self.add_state(Tasks.WIGGLE, T=3.0)
         # Grip checker
         self.add_state(Tasks.GRIP, grip=True)
         # Task spline to pull up from checker

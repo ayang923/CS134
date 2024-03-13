@@ -33,7 +33,8 @@ from sixdof.states import *
 
 import copy
 
-
+def reconstruct_board_state(flattened_lst):
+    return np.array(flattened_lst).reshape((25, 2)).tolist() if len(flattened_lst) == 50 else None
 
 class Color(Enum):
     GREEN = 1
@@ -55,6 +56,8 @@ class GameNode(Node):
         # Poses of all detected brown checkers, /brown from Detector
         self.sub_brown = self.create_subscription(PoseArray, '/brown',
                                                                   self.recvbrown, 3)
+
+        self.sub_board_state = self.create_subscription(UInt8MultiArray, '/board_state', self.recvstate, 3)
 
         # /dice Unsigned int array with value of two detected dice from Detector
         self.sub_dice = self.create_subscription(UInt8MultiArray, '/dice',
@@ -122,8 +125,15 @@ class GameNode(Node):
         self.repeat_source = 0
         self.repeat_dest = 0
 
+        self.curr_move_src_counter = self.clear_move_counter()
+        self.curr_move_dest_counter = self.clear_move_counter()
+
         # Game engine
         self.game = Game(self.gamestate)
+
+    def recvstate(self, msg):
+        receivedstate = reconstruct_board_state(msg.data)
+        self.gamestate = receivedstate if receivedstate is not None else self.gamestate
 
     def hardcode_move(self, msg):
         self.determine_action_flag = False
@@ -205,19 +215,13 @@ class GameNode(Node):
         self.board_theta = t
 
     def raise_determine_action_flag(self, msg:Bool):
-        self.get_logger().info("After move game state " + str(self.game.state))
-
         checkgame = Game(self.gamestate)
-        self.get_logger().info("After move actual state " + str(checkgame.state))
         fixes = self.fix_board(checkgame.state, self.game.state)
-        self.get_logger().info("fixes " + str(fixes))
         for fix in fixes:
             self.execute_normal(fix[0], fix[1], change_game=False)
             checkgame.set_state(self.gamestate)
-        self.get_logger().info("Expected state after fix: " + str(self.game.state))
-        # for hardcoded
-        self.determine_action_flag = False
-        #self.determine_action_flag = msg.data
+        self.determine_action_flag = msg.data
+
     def fix_board(self, actual_state, expected_state):
         green_incorrect = []
         brown_incorrect = []
@@ -442,8 +446,11 @@ class GameNode(Node):
 
         
         checkgame = Game(self.gamestate) # save the detected gamestate as a game object for comparison against the old gamestate
-        #if ((checkgame.state in self.game.legal_next_states(self.game.dice)) or self.firstmove): # Check that self.gamestate is a legal progression from last state given roll
-        if True:
+        self.get_logger().info('checkgame.state' + str(checkgame.state))
+        self.get_logger().info('GameNode.game.state' + str(self.game.state))
+        [low_row, high_row] = self.get_changed_bounds(checkgame)
+
+        if ((checkgame.state in self.game.legal_next_states(self.game.dice, low_row, high_row)) or self.firstmove or not self.changed): # Check that self.gamestate is a legal progression from last state given roll
             # FIXME: remove "or True" if we can get legal states working
             if self.firstmove:
                 self.firstmove = False
@@ -496,11 +503,42 @@ class GameNode(Node):
             #self.game.turn *= -1 # comment out if robot only plays as one color
         else:
             self.get_logger().info('Fixing board!!')
-            self.fix_board() # TODO!!
+            checkgame = Game(self.gamestate)
+            fixes = self.fix_board(checkgame.state, self.game.state)
+            for fix in fixes:
+                self.execute_normal(fix[0], fix[1], change_game=False)
+                checkgame.set_state(self.gamestate)
+            # for hardcoded
+            # self.determine_action_flag = False
 
         #self.get_logger().info("Gamestate:"+str(self.game.state))
     
-
+    def get_changed_bounds(self, checkgame):
+        low_row = 0
+        self.changed = True
+        while checkgame.state[low_row] == self.game.state[low_row]:
+            low_row += 1
+            if low_row == 24:
+                if (checkgame.state[low_row][0] != self.game.state[low_row][0] or
+                   checkgame.state[low_row][1] != self.game.state[low_row][1]):
+                    break
+                else:
+                    self.changed = False
+                    break
+        high_row = 24
+        if low_row != 24 and self.changed:
+            if not (checkgame.state[high_row][0] != self.game.state[high_row][0] or
+                   checkgame.state[high_row][1] != self.game.state[high_row][1]):
+                high_row -= 1
+                while (checkgame.state[high_row] == self.game.state[high_row]):
+                    if high_row == 0:
+                        self.changed = False
+                        break
+                    high_row -= 1
+        self.get_logger().info('lowest changed row' + str(low_row))        
+        self.get_logger().info('highest changed row' + str(high_row))
+        self.get_logger().info('Changed?' + str(self.changed))
+        return [low_row, high_row]
     
     def execute_off_bar(self, dest):
         turn = 0 if self.game.turn == 1 else 1
@@ -716,6 +754,10 @@ class GameNode(Node):
         msg.data = True
         self.pub_clear.publish(msg)
 
+    def clear_move_counter(self):
+        clear_move_counter = [0 for _ in range(25)]
+        clear_move_counter[-1] = [0, 0]
+
 POINT_LIM = 6
 
 class Game:
@@ -802,6 +844,63 @@ class Game:
             return True
         return False
 
+    def possible_moves_in_range(self, die, low_row, high_row):
+        moves = []
+        if high_row == 24:
+            if self.turn == 1 and self.state[24][0] > 0: # green turn, checker in bar
+                #print('move off bar in possible moves')
+                #print('self.state[24]',self.state[24])
+                #print("In move off bar turn 1")
+                for point in range(low_row, 6):
+                    if self.is_valid(24, point, die): # if our die can take the checker to the point
+                        #print("Inside valid")
+                        moves.append((24, point)) # add as a possible move
+                return moves # only returns the one off-bar move legal for this die
+            elif self.turn == -1 and self.state[24][1] < 0: # same for brown
+                #print("In move off bar turn -1 ")
+                for point in range(18, high_row):
+                    if self.is_valid(24, point, die):
+                        #print("Inside valid")
+                        moves.append((24, point))
+                return moves
+        elif self.all_checkers_in_end(): # all checkers in home board (true if true for either side)
+            #print("Inside move off board")
+            if self.turn == 1:
+                for point in range(low_row, high_row+1):
+                    if self.is_valid(point, 24, die):
+                        #print("Inside valid")
+                        moves.append((point, 25))
+            elif self.turn == -1:
+                for point in range(low_row, high_row+1):
+                    if self.is_valid(point, 24, die):
+                        #print("Inside valid")
+                        moves.append((point, 25))
+        # Normal moves, no moves off the board found
+        if not moves:
+            # print("Inside normal moves")
+            for point1 in range(low_row, high_row+1):
+                for point2 in range(low_row, high_row+1):
+                    if self.is_valid(point1, point2, die):
+                        #print("Inside valid")
+                        #print("Source point: ",point1)
+                        #print("Destination point: ", point2)
+                        moves.append((point1, point2))
+
+        # Move off board (again)
+        if not moves and self.all_checkers_in_end():
+            #print("Inside move off board again")
+            if self.turn == 1:
+                for point in range(low_row, high_row+1):
+                    if self.is_valid(point, 24, die, tried=True):
+                        #print("Inside valid")
+                        moves.append((point, 24))
+            elif self.turn == -1:
+                for point in range(low_row,high_row+1):
+                    if self.is_valid(point, 24, die, tried=True):
+                        #print("Inside valid")
+                        moves.append((point, 24))
+        return moves
+    
     def possible_moves(self, die):
         moves = []
         #print("Moves at the beginning of possible moves")
@@ -864,74 +963,55 @@ class Game:
     
         return moves
 
-    # def is_legal_transition(self,newgame,dice):
-    #     [die1, die2] = dice
-    #     changed_rows = []
-    #     i = 0
-    #     for old_row_count, new_row_count in zip(self.state,newgame.state):
-    #         if old_row_count != new_row_count:
-    #             changed_rows.append([i,new_row_count-old_row_count])
-    #         i += 1
-    #     # now we have a list full of [changed_row_number,delta of checker numbers]
-    #     # this is now a list of integer rows which have more than they did before
-    #     for row in changed_rows:
-    #         # check if either of the dice could get it there
-    #         # if a die can get you from this row to 
-    #         for die in [die1,die2]:
-    #             for lowrow in lower_rows:
-    #                 if lowrow + die == highrow
-                
-    #         # check if both can get it there
-            
-    #         # also handle when we have doubles??
-    #         if die1 == die2:
-    #             pass
-    #     pass
-
-    def legal_next_states(self, dice):
+    def legal_next_states(self, dice, low_row, high_row):
+        # combine two approaches:
+        # first, take the "new" state and figure out which rows have changed from
+        # the "old" state
+        # create a more limited set of rows only within the range of [lowest_changed_row, highest_changed_row]
+        # within this range, 
         # TODO: make sure this actually works!!        
         [die1, die2] = dice
         states = []
         if die1 == die2: # four moves, check all possible resulting states
-            moves1 = self.possible_moves(die1)
+            moves1 = self.possible_moves_in_range(die1,low_row,high_row)
             print('possiblemoves1', moves1)
             for move1 in moves1:
-                copy1 = copy.copy(self)
+                copy1 = copy.deepcopy(self)
                 copy1.move(move1)
-                moves2 = copy1.possible_moves(die1)
+                moves2 = copy1.possible_moves_in_range(die1,low_row,high_row)
                 for move2 in moves2:
-                    copy2 = copy.copy(copy1)
+                    copy2 = copy.deepcopy(copy1)
                     copy2.move(move2)
-                    moves3 = copy2.possible_moves(die1)
+                    moves3 = copy2.possible_moves_in_range(die1,low_row,high_row)
                     for move3 in moves3:
-                        copy3 = copy.copy(copy2)
+                        copy3 = copy.deepcopy(copy2)
                         copy3.move(move3)
-                        moves4 = copy3.possible_moves(die1)
+                        moves4 = copy3.possible_moves_in_range(die1,low_row,high_row)
                         for move4 in moves4:
-                            copy4 = copy.copy(copy3)
+                            copy4 = copy.deepcopy(copy3)
                             copy4.move(move4)
                             if copy4.state not in states:
                                 states.append(copy4.state)
         else:
             # find all states that could result from using die 1 then die 2
-            moves = self.possible_moves(die1)
+            moves1 = self.possible_moves_in_range(die1,low_row,high_row)
             for move1 in moves1:
-                copy1 = copy.copy(self)
+                copy1 = copy.deepcopy(self)
                 copy1.move(move1)
-                moves2 = copy1.possible_moves(die2)
+                moves2 = copy1.possible_moves_in_range(die2,low_row,high_row)
                 for move2 in moves2:
-                    copy2 = copy.copy(copy1)
+                    copy2 = copy.deepcopy(copy1)
                     copy2.move(move2)
                     if copy2.state not in states: # only add if not already in states
                         states.append(copy2.state)
             # find all states that could result from using die 2 then die 1
-            moves = self.possible_moves(die2)
+            moves1 = self.possible_moves_in_range(die2,low_row,high_row)
             for move1 in moves1:
-                copy1 = copy.copy(self)
+                copy1 = copy.deepcopy(self)
                 copy1.move(move1)
-                moves2 = copy1.possible_moves(die1)
+                moves2 = copy1.possible_moves_in_range(die1,low_row,high_row)
                 for move2 in moves2:
-                    copy2 = copy.copy(copy1)
+                    copy2 = copy.deepcopy(copy1)
                     copy2.move(move2)
                     if copy2.state not in states: # only add if not already in states
                         states.append(copy2.state)
