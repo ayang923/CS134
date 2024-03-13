@@ -1,29 +1,15 @@
-# TODO: tweak hsv bounds so it can detect in shadows (especially for brown/purple)
-# TODO: (higher prio) add "fine adjustment" based on tip cam!!
-    # notes from Gunter:
-    # go to where we think is above the checker
-    # MAKE SURE WRIST ROLL LOCKED @ np.pi/2 = aligned so camera can see
-    # tell trajnode to WAIT until:
-    # new message from detector node with adjustment command
-    # How to determine adjustment command:
-    # frame on camera in urdf
-    # fkin to camera to get camera position in xyz
-    # get coords of piece in camera coords
-    # vector comes out of the camera at xbar,ybar,1
-    # 	^^ we need to do the checkerboard undistort line to do this
-    # using this info, "improve" the checker location, and then go to that location
-    # and THEN, go down to pick up the checker
 # TODO: (low prio) add textual indicator of whose turn it is
 
 import numpy as np
 import rclpy
 
 import cv2, cv_bridge
+from collections.abc import Iterable
 
 from rclpy.node         import Node
 from sensor_msgs.msg    import Image
 from geometry_msgs.msg  import Pose, PoseArray
-from std_msgs.msg       import UInt8MultiArray, Bool
+from std_msgs.msg       import UInt8MultiArray, Bool, Float32MultiArray
 
 from sixdof.utils.TransformHelpers import *
 
@@ -37,6 +23,13 @@ BLUE_BOARD_LIMITS = np.array([[0, 40],[90, 140],[100, 190]])
 
 TIP_LIMITS = np.array(([95, 135], [50, 130], [70, 180]))
 
+
+def flatten_list(xs):
+    for x in xs:
+        if isinstance(x, Iterable) and not isinstance(x, (str, bytes)):
+            yield from flatten_list(x)
+        else:
+            yield x
 
 class DetectorNode(Node):
     def __init__(self, name):
@@ -61,6 +54,9 @@ class DetectorNode(Node):
 
         # Poses of all detected brown checkers
         self.pub_brown = self.create_publisher(PoseArray, '/brown', 3)
+
+        self.pub_checker_locations = self.create_publisher(Float32MultiArray, '/checker_locations', 3)
+        self.pub_board_state = self.create_publisher(UInt8MultiArray, "/board_state", 3)
 
         self.pub_dice = self.create_publisher(UInt8MultiArray, '/dice', 3)
 
@@ -98,6 +94,11 @@ class DetectorNode(Node):
                                    [0,2], [0,0], [0,0], [0,0], [0,0], [5,0],
                                    [0,0], [3,0], [0,0], [0,0], [0,0], [0,5],
                                    [0,0]]) # basically game representation
+        self.checker_locations = [[[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
+                                    [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
+                                    [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
+                                    [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
+                                    [[],[]], [[],[]]] 
         self.best_board_uv = None
         self.best_board_center_uv = None
 
@@ -470,9 +471,17 @@ class DetectorNode(Node):
                                    [0,0], [0,0], [0,0], [0,0], [0,0], [0,0],
                                    [0,0], [0,0], [0,0], [0,0], [0,0], [0,0],
                                    [0,0]])
+        self.checker_locations = [[[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
+                             [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
+                             [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
+                             [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
+                             [[],[]], [[],[]]] # last two are bar and unsorted
         if self.green_beliefs is None or self.brown_beliefs is None or self.board_buckets is None:
             return None
+        
         for green in self.green_beliefs:
+            green = list(green)
+            sorted = False
             for bucket in self.board_buckets:
                 xmin = bucket[0] - 0.03
                 xmax = bucket[0] + 0.03
@@ -484,7 +493,12 @@ class DetectorNode(Node):
                     green[1]>= 1.5):
                     bucket_ind = np.where(self.board_buckets == bucket)[0][0]
                     self.occupancy[bucket_ind][0] += 1
+                    self.checker_locations[bucket_ind][0].append(green)
+                    sorted = True
+            if not sorted:
+                self.checker_locations[25][0].append(green)
         for brown in self.brown_beliefs:
+            brown = list(brown)
             for bucket in self.board_buckets:
                 xmin = bucket[0] - 0.03
                 xmax = bucket[0] + 0.03
@@ -498,6 +512,15 @@ class DetectorNode(Node):
                     brown[1]>= 1.5):
                     bucket_ind = np.where(self.board_buckets == bucket)[0][0]
                     self.occupancy[bucket_ind][1] += 1
+                    self.checker_locations[bucket_ind][1].append(brown)
+                    sorted = True
+            if not sorted:
+                self.checker_locations[25][1].append(brown)
+        checker_msg = Float32MultiArray(data=list(flatten_list(self.checker_locations)))
+        self.pub_checker_locations.publish(checker_msg)
+
+        occupancy_msg = UInt8MultiArray(data=list(flatten_list(self.occupancy)))
+        self.pub_board_state.publish(occupancy_msg)
     
     def draw_best_board(self):
         if self.best_board_xy[0] is not None and self.best_board_uv is not None:
