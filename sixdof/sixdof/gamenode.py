@@ -1005,6 +1005,8 @@ class Game:
                 self.state[point2] = -1 # increment purple at destination
 
     def is_valid(self, point1, point2, die, tried = False):
+        if point2 < 0 or point2 > 25:
+            return False
         if point1 == 24: # coming off bar
             if point2 == 24 or point2 == 25: # souurce can't be bar or bear off
                 return False
@@ -1214,7 +1216,7 @@ class Game:
                     if copy1.is_valid(pur_cur, pur_cur - dices[0], dices[0]):
                         copy1.move(pur_cur, pur_cur - dices[0])
                         dices.remove(dices[0])
-                        if copy
+                        if copy1.is_valid(pur)
                     copy2 = copy.deepcopy(self)
                     
             elif not done and len_dices == 1:

@@ -183,7 +183,12 @@ class TrajectoryNode(Node):
                         else:
                             last_y = max(checker_location_copy[dest][0][0][1] if checker_location_copy[dest][0] else -float('inf'), checker_location_copy[dest][1][0][1] if checker_location_copy[dest][1] else -float('inf'))
                         dest_pos = np.array([self.grid_centers[dest][0][0], last_y + (-1 if dest <= 11 else 1)*0.05])
-                
+                elif dest == 24:
+                    checkers_in_bar = len(checker_location_copy[dest][0]) + len(checker_location_copy[dest][1])
+                    if checkers_in_bar < 6:
+                        dest_pos = self.grid_centers[dest][checkers_in_bar]
+                    else:
+                        continue
                 checker_location_copy[source][color].pop(0)
                 checker_location_copy[dest][color].insert(0, dest_pos)
                 self.task_handler.move_checker(source_pos, dest_pos)
