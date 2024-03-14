@@ -3,16 +3,67 @@ import rclpy
 
 from rclpy.node         import Node
 from sensor_msgs.msg    import JointState
-from geometry_msgs.msg  import PoseArray
-from std_msgs.msg       import Bool
+from geometry_msgs.msg  import PoseArray, Pose
+from std_msgs.msg       import Bool, Float32MultiArray, UInt8MultiArray
 
 from sixdof.utils.TransformHelpers import *
 
 from sixdof.states import Tasks, TaskHandler, JOINT_NAMES
 
+import copy
+
 RATE = 100.0            # Hertz
 
 nan = float("nan")
+
+def reconstruct_gamestate_array(flattened_lst):
+    return np.array(flattened_lst).reshape((26, 2)).tolist() if len(flattened_lst) == 52 else None
+
+def reconstruct_checker_location_array(flattened_lst):
+    game_state_list = flattened_lst[:52]
+    checker_location_list = flattened_lst[52:]
+
+    gamestate_array = reconstruct_gamestate_array(game_state_list)
+    if len(checker_location_list) != 60:
+        return None
+
+    reconstructed_array = [[[], []] for _ in range(26)]
+    curr_idx = 0
+    for triangle_i, triangle in enumerate(gamestate_array):
+        green_triangles = int(triangle[0])
+        brown_triangles = int(triangle[1])
+
+        for _ in range(green_triangles):
+            reconstructed_array[triangle_i][0].append([checker_location_list[curr_idx], checker_location_list[curr_idx+1]])
+            curr_idx += 2
+        for _ in range(brown_triangles):
+            reconstructed_array[triangle_i][1].append([checker_location_list[curr_idx], checker_location_list[curr_idx+1]])
+            curr_idx += 2
+    
+    return reconstructed_array
+
+def range_middle_out(start, stop, step=1):
+    """
+    Generates a list of integers similar to range() but starts from the middle and works outwards.
+    
+    Args:
+        start (int): The starting value of the range.
+        stop (int): The ending value of the range.
+        step (int, optional): The step between each pair of consecutive values. Default is 1.
+    
+    Returns:
+        list: A list of integers starting from the middle and working outwards.
+    """
+    middle = (start + stop) // 2  # Calculate the middle value
+    
+    # Generate the list from the middle value, working outwards
+    result = []
+    for i in range(0, middle - start + 1, step):
+        result.append(middle + i)
+        if middle - i != middle + i:
+            result.append(middle - i)
+    
+    return result
 
 class TrajectoryNode(Node):
     # Initialization.
@@ -40,19 +91,26 @@ class TrajectoryNode(Node):
         # creates task handler for robot
         self.task_handler = TaskHandler(self, np.array(self.position0).reshape(-1, 1))
 
+        self.checker_locations = None
+
         # Subscribers:
         # /joint_states from Hebi node
         self.fbksub = self.create_subscription(JointState, '/joint_states',
                                                self.recvfbk, 100)
         
         self.clear_sub = self.create_subscription(Bool, '/clear', self.rcvaction, 10)
-        self.checker_move_sub = self.create_subscription(PoseArray, '/checker_move',
+        self.checker_move_sub = self.create_subscription(UInt8MultiArray, '/checker_move',
                                                        self.rcvaction, 10)
         self.dice_roll_sub = self.create_subscription(PoseArray, '/dice_roll',
                                                     self.rcvaction, 10)
 
+        self.sub_checker_locations = self.create_subscription(Float32MultiArray, '/checker_locations', self.recvcheckerlocations, 3)
+
         self.task_handler.add_state(Tasks.INIT)
         #self.test(np.array([0.3,0.6]).reshape(-1,1), np.array([1.0,0.6]).reshape(-1,1))
+
+        self.sub_board = self.create_subscription(Pose, '/boardpose',
+                                                                  self.recvboard, 3)
 
         self.waiting_for_move = False
         self.moveready_pub = self.create_publisher(Bool, '/move_ready', 1)
@@ -67,16 +125,40 @@ class TrajectoryNode(Node):
         # every 5s, check to see if queue is empty and we need a new move
         self.check_queue_timer = self.create_timer(2, self.check_queue)
 
+        # Physical Game Board Info
+        self.board_x = None
+        self.board_y = None
+        self.board_theta = None # radians
+        self.board_buckets = None # center locations [x,y]
+        self.grid_centers = None # for placing
+
     def test(self, source_pos, dest_pos):
         self.task_handler.move_checker(source_pos, dest_pos)
     
+    def recvcheckerlocations(self, msg):
+        flattened_lst = list(msg.data)
+        reconstructed_checker_array = reconstruct_checker_location_array(flattened_lst)
+        if reconstructed_checker_array:
+            self.checker_locations = reconstructed_checker_array
+
+    def recvboard(self, msg):
+        '''
+        create / update belief of where the boards are based on most recent
+        /boardpose msg
+
+        in: /boardpose PoseArray
+        updates self.boardpose
+        '''
+        self.save_board_dims(msg)
+        self.update_centers()
+
     # Called repeatedly by incoming messages - do nothing for now
     def recvfbk(self, fbkmsg):
         self.actpos = list(fbkmsg.position)
         effort = list(fbkmsg.effort)
         #self.get_logger().info("gripper effort" + str(effort[5]))
         # self.get_logger().info("The angle of the gripper motor:" + str(self.actpos[5]))
-        if effort[5] > -1.50 and self.task_handler.curr_task_type == Tasks.WAIT:
+        if effort[5] > -1.50 and self.task_handler.curr_task_type == Tasks.CHECK:
             self.task_handler.clear()
 
 
@@ -84,13 +166,107 @@ class TrajectoryNode(Node):
         if type(msg) is Bool:
             if msg.data == True:
                 self.task_handler.clear()
-        elif type(msg) is PoseArray:
-            if len(msg.poses) == 2:
-                action = [p_from_T(T_from_Pose(pose))[:2,:] for pose in msg.poses]    
-                self.task_handler.move_checker(action[0],action[1]) # (source, dest)
-            else:
-                pass
+        elif type(msg) is UInt8MultiArray:
+            flattened_moves = list(msg.data)
+            moves = list(np.array(flattened_moves).reshape((len(flattened_moves)//3, 3)))
+            checker_location_copy = copy.deepcopy(self.checker_locations)
+            for source, dest, color in moves:
+                if not checker_location_copy[source][color]:
+                    continue
+                source_pos = np.array(checker_location_copy[source][color][0])
+                if dest <= 23:
+                    if len(checker_location_copy[dest][0]) + len(checker_location_copy[dest][1]) == 0:
+                        dest_pos = self.grid_centers[dest][0]
+                    else:
+                        if dest <= 11:
+                            last_y = min(checker_location_copy[dest][0][0][1] if checker_location_copy[dest][0] else float('inf'), checker_location_copy[dest][1][0][1] if checker_location_copy[dest][1] else float('inf'))
+                        else:
+                            last_y = max(checker_location_copy[dest][0][0][1] if checker_location_copy[dest][0] else -float('inf'), checker_location_copy[dest][1][0][1] if checker_location_copy[dest][1] else -float('inf'))
+                        dest_pos = np.array([self.grid_centers[dest][0][0], last_y + (-1 if dest <= 11 else 1)*0.05])
+                
+                checker_location_copy[source][color].pop(0)
+                checker_location_copy[dest][color].insert(0, dest_pos)
+                self.task_handler.move_checker(source_pos, dest_pos)
         self.waiting_for_move = False
+
+    def save_board_dims(self, msg:Pose):
+        self.board_x = msg.position.x
+        self.board_y = msg.position.y
+        R = R_from_T(T_from_Pose(msg))
+        t = np.arctan2(R[1,0],R[0,0]) # undo rotz
+        self.board_theta = t
+    
+    def update_centers(self):
+        centers = np.zeros((25,2))
+        grid = np.zeros((25,6,2))
+        
+        # board dimensions (all in m):
+
+        cx = self.board_x
+        cy = self.board_y
+
+        L = 1.061 # board length
+        H = 0.536 # board width
+        dL = 0.067 # triangle to triangle dist
+        dH = 0.045 # checker to checker stack dist
+
+        dL0 = 0.235 # gap from blue side to first triangle center
+        dL1 = 0.117 - dL # gap between two sections of triangles (minus dL)
+
+        for i in np.arange(6):
+            x = cx + L/2 - dL0 - i*dL
+            y = cy + H/2 - dH/2 - 2.5*dH
+            centers[i] = [x,y]
+            for j in np.arange(6):
+                y = cy + H/2 - dH/2 - j*dH
+                grid[i][j] = [x,y]
+
+        for i in np.arange(6,12):
+            x = cx + L/2 - dL0 - dL1 - i*dL
+            y = cy + H/2 - dH/2 - 2.5*dH
+            centers[i] = [x,y]
+            for j in np.arange(6):
+                y = cy + H/2 - dH/2 - j*dH
+                grid[i][j] = [x,y]
+            
+        for i in np.arange(12,18):
+            x = cx + L/2 - dL0 - dL1 - (23-i)*dL
+            y = cy - H/2 + dH/2 + 2.5*dH
+            centers[i] = [x,y]
+            for j in np.arange(6):
+                y = cy - H/2 + dH/2 + j*dH
+                grid[i][j] = [x,y]                
+
+    
+        for i in np.arange(18,24):
+            x = cx + L/2 - dL0 - (23-i)*dL
+            y = cy - H/2 + dH/2 + 2.5*dH
+            centers[i] = [x,y]
+            for j in np.arange(6):
+                y = cy - H/2 + dH/2 + j*dH
+                grid[i][j] = [x,y]
+                
+        x = cx + L/2 - dL0 - 5*dL - (dL1+dL)/2
+        y = cy
+        centers[24] = [x,y] # bar
+        for j in range_middle_out(0,5):
+            y = cy + 2.5*dH - j*dH
+            grid[24][j] = [x,y]
+        
+        rotated_centers = np.zeros((25,2))
+        rotated_grid_centers = np.zeros((25,6,2))
+        theta = self.board_theta
+        for i in np.arange(25):
+            x = centers[i][0]*np.cos(theta) - centers[i][1]*np.sin(theta)
+            y = centers[i][0]*np.sin(theta) + centers[i][1]*np.cos(theta)
+            rotated_centers[i] = [x,y]
+            for j in np.arange(6):
+                x = grid[i][j][0]*np.cos(theta) - grid[i][j][1]*np.sin(theta)
+                y = grid[i][j][0]*np.sin(theta) + grid[i][j][1]*np.cos(theta)
+                rotated_grid_centers[i][j] = [x,y]
+
+        self.board_buckets = rotated_centers
+        self.grid_centers = rotated_grid_centers
 
     # Shutdown
     def shutdown(self):

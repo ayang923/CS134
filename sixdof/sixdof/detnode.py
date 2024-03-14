@@ -191,8 +191,8 @@ class DetectorNode(Node):
             circles = np.round(circles[0, :]).astype("int")
     
             # Draw the circles on the original image
-            for (u, v, r) in circles:
-                cv2.circle(self.tip_rgb, np.int0(np.array([u,v])), r, color=(0,0,255), thickness=3)
+            #for (u, v, r) in circles:
+                #cv2.circle(self.tip_rgb, np.int0(np.array([u,v])), r, color=(0,0,255), thickness=3)
                 #xy = uvToXY(self.M, int(u), int(v))
                 #if xy is not None:
                     #[x, y] = xy
@@ -401,7 +401,7 @@ class DetectorNode(Node):
                 xy = uvToXY(self.M, int(u), int(v))
                 if xy is not None:
                     [x, y] = xy
-                    cv2.circle(self.rgb, np.int0(np.array([u,v])), r, color=(0,0,255), thickness=3)
+                    #cv2.circle(self.rgb, np.int0(np.array([u,v])), r, color=(0,0,255), thickness=3)
                     turnsignal.append([x, y])
             turnsignal = np.array(turnsignal)
 
@@ -474,7 +474,7 @@ class DetectorNode(Node):
                                    [0,0], [0,0], [0,0], [0,0], [0,0], [0,0],
                                    [0,0], [0,0], [0,0], [0,0], [0,0], [0,0],
                                    [0,0], [0,0], [0,0], [0,0], [0,0], [0,0],
-                                   [0,0]])
+                                   [0,0], [0, 0]])
         self.checker_locations = [[[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
                              [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
                              [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
@@ -485,7 +485,7 @@ class DetectorNode(Node):
         
         for green in self.green_beliefs:
             green = list(green)
-            sorted = False
+            in_bucket = False
             for bucket in self.board_buckets:
                 xmin = bucket[0] - 0.03
                 xmax = bucket[0] + 0.03
@@ -497,12 +497,13 @@ class DetectorNode(Node):
                     green[1]>= 1.5):
                     bucket_ind = np.where(self.board_buckets == bucket)[0][0]
                     self.occupancy[bucket_ind][0] += 1
-                    self.checker_locations[bucket_ind][0].append(green)
-                    sorted = True
-            if not sorted:
-                self.checker_locations[25][0].append(green)
+                    self.checker_locations[bucket_ind][0].append(green[0])
+                    in_bucket = True
+            if not in_bucket:
+                self.checker_locations[25][0].append(green[0])
         for brown in self.brown_beliefs:
             brown = list(brown)
+            in_bucket = False
             for bucket in self.board_buckets:
                 xmin = bucket[0] - 0.03
                 xmax = bucket[0] + 0.03
@@ -516,16 +517,28 @@ class DetectorNode(Node):
                     brown[1]>= 1.5):
                     bucket_ind = np.where(self.board_buckets == bucket)[0][0]
                     self.occupancy[bucket_ind][1] += 1
-                    self.checker_locations[bucket_ind][1].append(brown)
-                    sorted = True
-            if not sorted:
-                self.checker_locations[25][1].append(brown)
+                    self.checker_locations[bucket_ind][1].append(brown[0])
+                    in_bucket = True
+            if not in_bucket:
+                self.checker_locations[25][1].append(brown[0])
 
-        checker_msg = Float32MultiArray(data=list(flatten_list(self.occupancy)))
-        self.pub_checker_locations.publish(checker_msg)
+        for triangle in range(25):
+            if triangle <= 11:
+                self.checker_locations[triangle][0].sort(key=lambda x: x[1])
+                self.checker_locations[triangle][1].sort(key=lambda x: x[1])
 
-        occupancy_msg = UInt8MultiArray(data=list(flatten_list(self.occupancy)))
-        self.pub_board_state.publish(occupancy_msg)
+            elif triangle <=24:
+                self.checker_locations[triangle][0].sort(key=lambda x: x[1], reverse=True)
+                self.checker_locations[triangle][1].sort(key=lambda x: x[1], reverse=True)
+        flattened_state_list = list(flatten_list(self.occupancy))
+        flattened_checker_lst = list(flatten_list(self.checker_locations))
+
+        if sum(flattened_state_list) == 30:
+            checker_msg = Float32MultiArray(data=(flattened_state_list+flattened_checker_lst))
+            self.pub_checker_locations.publish(checker_msg)
+
+            occupancy_msg = UInt8MultiArray(data=flattened_state_list)
+            self.pub_board_state.publish(occupancy_msg)
     
     def draw_best_board(self):
         if self.best_board_xy[0] is not None and self.best_board_uv is not None:
@@ -571,6 +584,11 @@ class DetectorNode(Node):
                 if uv is not None:
                     [u,v] = uv
                     cv2.circle(self.rgb, np.int0(np.array([u,v])), radius=15, color=(156,87,255), thickness=3)
+                    font = cv2.FONT_HERSHEY_SIMPLEX 
+                    if y < 0.4:
+                        cv2.putText(self.rgb, "Human Turn",np.int0(np.array([50,330])), font, fontScale=1,color=(128, 0, 128),thickness=5)
+                    else:
+                        cv2.putText(self.rgb, "Robot Turn",np.int0(np.array([50,330])), font, fontScale=1,color=(0, 255, 0),thickness=5)
 
     def draw_buckets(self):
         if self.best_board_xy[0] is None:
