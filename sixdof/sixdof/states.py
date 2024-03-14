@@ -161,9 +161,9 @@ class WiggleTask(TaskObject):
         # Pick the convergence bandwidth.
         self.lam = lam
 
-        self.x_L = self.p0 + np.array([-0.008, 0, -0.004, 0, 0]).reshape(-1,1)
+        self.x_L = self.p0 + np.array([-0.005, 0, -0.004, 0, 0]).reshape(-1,1)
         self.x_Lh = self.p0 + np.array([-0.008, 0, 0.01, 0, 0]).reshape(-1,1)
-        self.x_R = self.p0 + np.array([0.008, 0, -0.004, 0, 0]).reshape(-1,1)
+        self.x_R = self.p0 + np.array([0.0012, 0, -0.002, 0, 0]).reshape(-1,1)
         self.x_Rh = self.p0 + np.array([0.008, 0, 0.01, 0, 0]).reshape(-1,1)
         self.x_F = self.p0 + np.array([0, 0, 0.0, 0, 0]).reshape(-1,1)
 
@@ -392,8 +392,8 @@ class TaskHandler():
         relx_source = source_pos[0] - robotx
         rely_source = source_pos[1] - roboty
         r_source = np.sqrt(relx_source**2 + rely_source**2)
-        source_offset = np.array([(0.95 + 0.15 * relx_source - 0.03 * rely_source) * 0.01,
-                                  (0.65 - 0.75 * relx_source + 0.05 * rely_source) * 0.01,
+        source_offset = np.array([(0.8 + 0.15 * relx_source - 0.03 * rely_source) * 0.01,
+                                  (0.65 - 0.0 * relx_source + 0.05 * rely_source) * 0.01,
                                   -(-0.08 * r_source + 1.553) * 0.01,
                                   0,
                                   0]).reshape(-1,1)
@@ -440,8 +440,8 @@ class TaskHandler():
             ydirsign = 0
 
         if source_pos_xyz[0] < 0.25:
-            source_pos = source_pos + np.array([0, 0, -0.01, 0, 0]).reshape(-1,1)
-            dest_pos = dest_pos + np.array([0, 0, -0.01, 0, 0]).reshape(-1,1)
+            source_pos = source_pos + np.array([0.015, 0, 0.015, 0, 0]).reshape(-1,1)
+            dest_pos = dest_pos + np.array([0.015, 0, 0.015, 0, 0]).reshape(-1,1)
 
         #self.node.get_logger().info("given source: " + str(source_pos))
         #self.node.get_logger().info("given dest: " + str(dest_pos))
