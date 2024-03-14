@@ -915,6 +915,7 @@ class Game:
                 break
             if not done and len_dices > 1:
                 if dice[0] != dice[1]: # If the dice is a normal roll
+                    cur_pos2 = pur_cur - dices[1]
                     if copy1.is_valid(pur_cur, pur_cur - dices[0], dices[0]):
                         cur_pos = pur_cur - dices[0]
                         copy2 = copy.deepcopy(copy1)
@@ -923,7 +924,7 @@ class Game:
                                 copy2.move(cur_pos, 24)
                         copy2.move(pur_cur, cur_pos)
                         nex_pos = cur_pos - dices[1]
-                        if copy2.is_valid(cur_pos, nex_pos, dices[1]) and ((nex_pos) in pur_inc):
+                        if copy2.is_valid(cur_pos, nex_pos, dices[1]) and ((nex_pos) in pur_inc) and (not gre_inc) and (not gre_dec): # if dice1 + dice2 makes a valid move
                             dices.remove(dices[1])
                             dices.remove(dices[0])
                             print("dices is :" + str(dices))
@@ -938,30 +939,31 @@ class Game:
                                         print("In single dice roll there was no green moved with hit")
                                         return False
                             copy1.move(pur_cur, cur_pos)
-                            if (cur_pos - dice[0])  < 24:
-                                if copy1.state[cur_pos - dice[0]] == 1:
-                                    copy1.move(cur_pos - dice[0], 24)
-                                    if (cur_pos - dice[0]) in gre_dec and 24 in gre_inc:
-                                        gre_dec.remove(cur_pos - dice[0])
+                            if (nex_pos)  < 24:
+                                if copy1.state[nex_pos] == 1:
+                                    copy1.move(nex_pos, 24)
+                                    if (nex_pos) in gre_dec and 24 in gre_inc:
+                                        gre_dec.remove(nex_pos)
                                         gre_inc.remove(24)
                                     else:
                                         print("In single dice roll there was no green moved with hit")
                                         return False
-                            copy1.move(cur_pos, cur_pos - dice[0])
+                            copy1.move(cur_pos, nex_pos)
                             done = True
                             print("Done after updating: " + str(done))
                             
-                    if copy1.is_valid(pur_cur, pur_cur - dices[1], dices[1]) and not done:
-                        cur_pos = pur_cur - dices[1]
+                    if copy1.is_valid(pur_cur, cur_pos2, dice[1]) and not done:
+                        cur_pos = cur_pos2
                         copy2 = copy.deepcopy(copy1)
                         if cur_pos < 24:
                             if copy2.state[cur_pos] == 1:
                                 copy2.move(cur_pos, 24)
                         copy2.move(pur_cur, cur_pos)
-                        if copy2.is_valid(cur_pos, cur_pos - dices[0], dices[0]) and ((cur_pos - dices[0]) in pur_inc): # Change is valid 
+                        nex_pos = cur_pos - dices[0]
+                        if copy2.is_valid(cur_pos, nex_pos, dices[0]) and ((nex_pos) in pur_inc): # Change is valid 
                             dices.remove(dices[1])
                             dices.remove(dices[0])
-                            pur_inc.remove(cur_pos - dices[0])
+                            pur_inc.remove(nex_pos)
                             if cur_pos < 24:
                                 if copy1.state[cur_pos] == 1:
                                     copy1.move(cur_pos, 24)
@@ -972,16 +974,16 @@ class Game:
                                         print("In single dice role part 2 there was no green moved with hit")
                                         return False
                             copy1.move(pur_cur, cur_pos)
-                            if (cur_pos - dice[0]) < 24:
-                                if copy1.state[cur_pos - dice[0]] == 1:
-                                    copy1.move(cur_pos - dice[0], 24)
-                                    if (cur_pos - dice[0]) in gre_dec and 24 in gre_inc:
-                                        gre_dec.remove(cur_pos - dice[0])
+                            if (nex_pos) < 24:
+                                if copy1.state[nex_pos] == 1:
+                                    copy1.move(nex_pos, 24)
+                                    if (nex_pos) in gre_dec and 24 in gre_inc:
+                                        gre_dec.remove(nex_pos)
                                         gre_inc.remove(24)
                                     else:
                                         print("In single dice role part 2 there was no green moved with hit")
                                         return False
-                            copy1.move(cur_pos, cur_pos - dice[0])
+                            copy1.move(cur_pos, nex_pos)
                             done = True
                             
                 else: # If the dice is a double roll
