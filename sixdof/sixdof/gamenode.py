@@ -41,16 +41,16 @@ class Color(Enum):
 
 # Initial Board States
 STANDARD = [[2,0], [0,0], [0,0], [0,0], [0,0], [0,5],
-                     [0,0], [0,3], [0,0], [0,0], [0,0], [5,0],
-                     [0,5], [0,0], [0,0], [0,0], [3,0], [0,0],
-                     [5,0], [0,0], [0,0], [0,0], [0,0], [0,2],
-                     [0,0], [0,0]]
+            [0,0], [0,3], [0,0], [0,0], [0,0], [5,0],
+            [0,5], [0,0], [0,0], [0,0], [3,0], [0,0],
+            [5,0], [0,0], [0,0], [0,0], [0,0], [0,2],
+            [0,0], [0,0]]
 
 BEAR_OFF = [[0,3], [0,3], [0,3], [0,3], [0,3], [0,0],
-                     [0,0], [0,0], [0,0], [0,0], [0,0], [0,0],
-                     [0,0], [0,0], [0,0], [0,0], [0,0], [0,0],
-                     [0,0], [3,0], [3,0], [3,0], [3,0], [3,0],
-                     [0,0], [0,0]]
+            [0,0], [0,0], [0,0], [0,0], [0,0], [0,0],
+            [0,0], [0,0], [0,0], [0,0], [0,0], [0,0],
+            [0,0], [3,0], [3,0], [3,0], [3,0], [3,0],
+            [0,0], [0,0]]
 
 def flatten_list(xs):
     for x in xs:
@@ -116,7 +116,7 @@ class GameNode(Node):
         self.first_human_turn_report = False # logging flag
 
         # Game engine
-        self.game = Game(STANDARD)
+        self.game = Game(BEAR_OFF)
         self.display_on = True
         if self.display_on:
             self.render = Render(self.game)
@@ -258,6 +258,9 @@ class GameNode(Node):
             cv2.putText(dice_img, "Robot Turn", (25, 300), font, font_scale, (0, 255, 0), 5, cv2.LINE_AA)
         else:
             cv2.putText(dice_img, "Human Turn", (25, 300), font, font_scale, (128, 0, 128), 5, cv2.LINE_AA)
+        if self.display_on:
+            self.render.draw()
+            self.render.update()
         #if self.correction_notif:
         #    cv2.putText(dice_img, "Redo move, play correctly!", (100, 300), font, font_scale, (255, 255, 255), 5, cv2.LINE_AA)
 
@@ -432,9 +435,6 @@ class GameNode(Node):
         color = 0 if self.game.turn == 1 else 0
         if change_game:
             self.game.move(source, 25)
-            if self.display_on:
-                self.render.draw()
-                self.render.update()
 
         return [source, 25, color]
     
@@ -443,19 +443,13 @@ class GameNode(Node):
 
         if change_game:
             self.game.move(dest, 24) # move oppo checker to bar in game.state
-            self.game.move(source,dest) # move my checker to destination in game.state
-            if self.display_on:
-                self.render.draw()
-                self.render.update()            
+            self.game.move(source,dest) # move my checker to destination in game.state          
 
         return [[dest, 24, 0 if color == 1 else 1], [source, dest, color]]
 
     def execute_normal(self, source, dest, color, change_game=True):        
         if change_game:
             self.game.move(source, dest)
-            if self.display_on:
-                self.render.draw()
-                self.render.update()
 
         return [[source, dest ,color]]
     
@@ -550,7 +544,7 @@ class GameNode(Node):
                         # just a normal moving of the bar
                         gamecopy.move(move[0],move[1])
                 # Executing a hit 
-                elif np.sign(gamecopy.state[move[1]]) == -1:
+                elif move[1] < 24 and np.sign(gamecopy.state[move[1]]) == -1:
                     # normal hit
                     gamecopy.move(move[1],bar)
                     gamecopy.move(move[0],move[1])

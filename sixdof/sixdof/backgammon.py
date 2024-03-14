@@ -16,8 +16,8 @@ BUTTON_WIDTH = 80
 BUTTON_HEIGHT = 40
 
 # Colors
-WHITE = (128, 0, 128)
-BLACK = (0, 255, 0)
+PURPLE = (128, 0, 128)
+GREEN = (0, 255, 0)
 TAN = (200, 160, 120)
 BROWN = (110, 80, 50)
 LIGHT_BROWN = (150, 130, 90)
@@ -51,9 +51,9 @@ class Render:
         self.screen.blit(text, text_rect)
 
         if self.game.turn > 0:
-            text = self.font.render('Robot\'s Turn', True, (0, 255, 0))
+            text = self.font.render('Robot\'s Turn', True, GREEN)
         else:
-            text = self.font.render('Human\'s Turn', True, (128, 0, 128))
+            text = self.font.render('Human\'s Turn', True, PURPLE)
         text_rect = text.get_rect(center = (SCREEN_WIDTH / 2, BORDER_WIDTH / 2))
         self.screen.blit(text, text_rect)
     
@@ -65,32 +65,32 @@ class Render:
     def draw_pips(self, die, pos):
         match (die):
             case 1:
-                pygame.draw.circle(self.screen, BLACK, pos, PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, pos, PIP_RAD)
             case 2:
-                pygame.draw.circle(self.screen, BLACK, (pos[0] - DIE_WIDTH / 4, pos[1] + DIE_WIDTH / 4), PIP_RAD)
-                pygame.draw.circle(self.screen, BLACK, (pos[0] + DIE_WIDTH / 4, pos[1] - DIE_WIDTH / 4), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] - DIE_WIDTH / 4, pos[1] + DIE_WIDTH / 4), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] + DIE_WIDTH / 4, pos[1] - DIE_WIDTH / 4), PIP_RAD)
             case 3:
-                pygame.draw.circle(self.screen, BLACK, pos, PIP_RAD)
-                pygame.draw.circle(self.screen, BLACK, (pos[0] - DIE_WIDTH / 4, pos[1] + DIE_WIDTH / 4), PIP_RAD)
-                pygame.draw.circle(self.screen, BLACK, (pos[0] + DIE_WIDTH / 4, pos[1] - DIE_WIDTH / 4), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, pos, PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] - DIE_WIDTH / 4, pos[1] + DIE_WIDTH / 4), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] + DIE_WIDTH / 4, pos[1] - DIE_WIDTH / 4), PIP_RAD)
             case 4:
-                pygame.draw.circle(self.screen, BLACK, (pos[0] - DIE_WIDTH / 4, pos[1] - DIE_WIDTH / 4), PIP_RAD)
-                pygame.draw.circle(self.screen, BLACK, (pos[0] - DIE_WIDTH / 4, pos[1] + DIE_WIDTH / 4), PIP_RAD)
-                pygame.draw.circle(self.screen, BLACK, (pos[0] + DIE_WIDTH / 4, pos[1] - DIE_WIDTH / 4), PIP_RAD)
-                pygame.draw.circle(self.screen, BLACK, (pos[0] + DIE_WIDTH / 4, pos[1] + DIE_WIDTH / 4), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] - DIE_WIDTH / 4, pos[1] - DIE_WIDTH / 4), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] - DIE_WIDTH / 4, pos[1] + DIE_WIDTH / 4), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] + DIE_WIDTH / 4, pos[1] - DIE_WIDTH / 4), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] + DIE_WIDTH / 4, pos[1] + DIE_WIDTH / 4), PIP_RAD)
             case 5:
-                pygame.draw.circle(self.screen, BLACK, pos, PIP_RAD)
-                pygame.draw.circle(self.screen, BLACK, (pos[0] - DIE_WIDTH / 4, pos[1] - DIE_WIDTH / 4), PIP_RAD)
-                pygame.draw.circle(self.screen, BLACK, (pos[0] - DIE_WIDTH / 4, pos[1] + DIE_WIDTH / 4), PIP_RAD)
-                pygame.draw.circle(self.screen, BLACK, (pos[0] + DIE_WIDTH / 4, pos[1] - DIE_WIDTH / 4), PIP_RAD)
-                pygame.draw.circle(self.screen, BLACK, (pos[0] + DIE_WIDTH / 4, pos[1] + DIE_WIDTH / 4), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, pos, PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] - DIE_WIDTH / 4, pos[1] - DIE_WIDTH / 4), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] - DIE_WIDTH / 4, pos[1] + DIE_WIDTH / 4), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] + DIE_WIDTH / 4, pos[1] - DIE_WIDTH / 4), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] + DIE_WIDTH / 4, pos[1] + DIE_WIDTH / 4), PIP_RAD)
             case 6:
-                pygame.draw.circle(self.screen, BLACK, (pos[0] - DIE_WIDTH / 4, pos[1] - DIE_WIDTH / 4), PIP_RAD)
-                pygame.draw.circle(self.screen, BLACK, (pos[0] - DIE_WIDTH / 4, pos[1] + DIE_WIDTH / 4), PIP_RAD)
-                pygame.draw.circle(self.screen, BLACK, (pos[0] + DIE_WIDTH / 4, pos[1] - DIE_WIDTH / 4), PIP_RAD)
-                pygame.draw.circle(self.screen, BLACK, (pos[0] + DIE_WIDTH / 4, pos[1] + DIE_WIDTH / 4), PIP_RAD)
-                pygame.draw.circle(self.screen, BLACK, (pos[0] - DIE_WIDTH / 4, pos[1]), PIP_RAD)
-                pygame.draw.circle(self.screen, BLACK, (pos[0] + DIE_WIDTH / 4, pos[1]), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] - DIE_WIDTH / 4, pos[1] - DIE_WIDTH / 4), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] - DIE_WIDTH / 4, pos[1] + DIE_WIDTH / 4), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] + DIE_WIDTH / 4, pos[1] - DIE_WIDTH / 4), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] + DIE_WIDTH / 4, pos[1] + DIE_WIDTH / 4), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] - DIE_WIDTH / 4, pos[1]), PIP_RAD)
+                pygame.draw.circle(self.screen, PURPLE, (pos[0] + DIE_WIDTH / 4, pos[1]), PIP_RAD)
             case _:
                 pass
 
@@ -98,10 +98,10 @@ class Render:
         pygame.draw.rect(self.screen, (200, 255, 200), ((SCREEN_WIDTH - BUTTON_WIDTH) / 2, (SCREEN_HEIGHT - BUTTON_HEIGHT) / 2, BUTTON_WIDTH, BUTTON_HEIGHT))
         pygame.draw.rect(self.screen, DARK_BROWN, ((SCREEN_WIDTH - BUTTON_WIDTH) / 2, (SCREEN_HEIGHT - BUTTON_HEIGHT) / 2, BUTTON_WIDTH, BUTTON_HEIGHT), 2)
 
-        pygame.draw.rect(self.screen, WHITE, (SCREEN_WIDTH / 2 + DIE_WIDTH, (SCREEN_HEIGHT - DIE_WIDTH) / 2, DIE_WIDTH, DIE_WIDTH))
-        pygame.draw.rect(self.screen, BLACK, (SCREEN_WIDTH / 2 + DIE_WIDTH, (SCREEN_HEIGHT - DIE_WIDTH) / 2, DIE_WIDTH, DIE_WIDTH), 2)
-        pygame.draw.rect(self.screen, WHITE, (SCREEN_WIDTH / 2 - 2 * DIE_WIDTH, (SCREEN_HEIGHT - DIE_WIDTH) / 2, DIE_WIDTH, DIE_WIDTH))
-        pygame.draw.rect(self.screen, BLACK, (SCREEN_WIDTH / 2 - 2 * DIE_WIDTH, (SCREEN_HEIGHT - DIE_WIDTH) / 2, DIE_WIDTH, DIE_WIDTH), 2)
+        pygame.draw.rect(self.screen, GREEN, (SCREEN_WIDTH / 2 + DIE_WIDTH, (SCREEN_HEIGHT - DIE_WIDTH) / 2, DIE_WIDTH, DIE_WIDTH))
+        pygame.draw.rect(self.screen, PURPLE, (SCREEN_WIDTH / 2 + DIE_WIDTH, (SCREEN_HEIGHT - DIE_WIDTH) / 2, DIE_WIDTH, DIE_WIDTH), 2)
+        pygame.draw.rect(self.screen, GREEN, (SCREEN_WIDTH / 2 - 2 * DIE_WIDTH, (SCREEN_HEIGHT - DIE_WIDTH) / 2, DIE_WIDTH, DIE_WIDTH))
+        pygame.draw.rect(self.screen, PURPLE, (SCREEN_WIDTH / 2 - 2 * DIE_WIDTH, (SCREEN_HEIGHT - DIE_WIDTH) / 2, DIE_WIDTH, DIE_WIDTH), 2)
         
         pos = (SCREEN_WIDTH / 2 - 1.5 * DIE_WIDTH, SCREEN_HEIGHT / 2)
         pos2 = (SCREEN_WIDTH / 2 + 1.5 * DIE_WIDTH, SCREEN_HEIGHT / 2)
@@ -123,19 +123,19 @@ class Render:
             for j in range(np.abs(point)):
                 pos = point_pos.copy()
                 pos[1] -= 2 * j * CHECKER_RAD if i < 12 else -2 * j * CHECKER_RAD
-                color = WHITE if point > 0 else BLACK
-                border = BLACK if point > 0 else WHITE
+                color = GREEN if point > 0 else PURPLE
+                border = PURPLE if point > 0 else GREEN
                 pygame.draw.circle(self.screen, color, pos, CHECKER_RAD)
                 pygame.draw.circle(self.screen, border, pos, CHECKER_RAD, 2)
         
         for i in range(self.game.state[24][0]):
             pos = (SCREEN_WIDTH / 2, SCREEN_HEIGHT - BORDER_WIDTH - (2 * i + 1) * CHECKER_RAD)
-            pygame.draw.circle(self.screen, WHITE, pos, CHECKER_RAD)
-            pygame.draw.circle(self.screen, BLACK, pos, CHECKER_RAD, 2)
+            pygame.draw.circle(self.screen, GREEN, pos, CHECKER_RAD)
+            pygame.draw.circle(self.screen, PURPLE, pos, CHECKER_RAD, 2)
         for i in range(self.game.state[24][1]):
             pos = (SCREEN_WIDTH / 2, BORDER_WIDTH + (2 * i + 1) * CHECKER_RAD)
-            pygame.draw.circle(self.screen, BLACK, pos, CHECKER_RAD)
-            pygame.draw.circle(self.screen, WHITE, pos, CHECKER_RAD, 2)
+            pygame.draw.circle(self.screen, PURPLE, pos, CHECKER_RAD)
+            pygame.draw.circle(self.screen, GREEN, pos, CHECKER_RAD, 2)
 
     def draw_background(self):
         pygame.draw.rect(self.screen, TAN, (0, 0, SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -368,7 +368,7 @@ def choose_move(game, moves):
         # print("Chosen move: {}".format(move))
     else:
         if not game.num_checkers():
-            print("GAME OVER! {} WINS!".format("White" if game.turn == 1 else "Black"))
+            print("GAME OVER! {} WINS!".format("GREEN" if game.turn == 1 else "PURPLE"))
             game.done = True
         else:
             print("No legal moves.")
