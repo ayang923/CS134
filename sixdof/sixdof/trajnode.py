@@ -191,6 +191,8 @@ class TrajectoryNode(Node):
                     else:
                         self.task_handler.move_checker(self.turn_signal_pos, np.array([0.20,0.47]))
                     continue
+                if color != 0 and color != 1:
+                    continue
                 if not checker_location_copy[source][color]:
                     self.get_logger().info("checker locations " + str(checker_location_copy[source][color]))
                     continue
@@ -228,10 +230,10 @@ class TrajectoryNode(Node):
                     while True:
                         dest_pos = np.array([np.random.uniform(low=BEAROFF_BOUNDS[0, 0], high=BEAROFF_BOUNDS[0, 1]), np.random.uniform(low=BEAROFF_BOUNDS[1, 0], high=BEAROFF_BOUNDS[1, 1])])
                         for checker_location in checker_location_copy[dest][0]:
-                            if np.linalg.norm(dest_pos - checker_location) >= 0.4:
+                            if np.linalg.norm(dest_pos - checker_location) >= 0.425:
                                 continue
                         for checker_location in checker_location_copy[dest][1]:
-                            if np.linalg.norm(dest_pos - checker_location) >= 0.4:
+                            if np.linalg.norm(dest_pos - checker_location) >= 0.425:
                                 continue
                         
                         break

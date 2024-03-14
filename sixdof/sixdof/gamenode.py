@@ -16,6 +16,7 @@
 from geometry_msgs.msg  import Pose, PoseArray
 from std_msgs.msg import UInt8MultiArray, Bool
 from collections.abc import Iterable
+import time
 
 from enum import Enum
 
@@ -68,6 +69,8 @@ class GameNode(Node):
     def __init__(self, name):
         super().__init__(name)
 
+        self.last_recv_time = time.time()
+
         # /dice Unsigned int array with value of two detected dice from Detector
         self.sub_dice = self.create_subscription(UInt8MultiArray, '/dice',
                                                                  self.recvdice, 3)
@@ -116,12 +119,14 @@ class GameNode(Node):
         self.first_human_turn_report = False # logging flag
 
         # Game engine
-        self.game = Game(BEAR_OFF)
+        self.game = Game(STANDARD)
         self.display_on = True
         if self.display_on:
             self.render = Render(self.game)
             self.render.draw()
             self.render.update()
+            update_pygame = self.create_timer(0.5,self.render.get)
+        
     
     def recvstate(self, msg: UInt8MultiArray):
         flattened_lst = list(msg.data)
@@ -130,6 +135,7 @@ class GameNode(Node):
         #self.get_logger().info("board state " + str(len(flattened_lst)))
         if reconstructed_lst:
             self.gamestate = reconstructed_lst
+            self.last_recv_time = time.time()
     
     def hardcode_move(self, msg):
         self.determine_action_flag = False
@@ -161,6 +167,10 @@ class GameNode(Node):
             self.turn_signal = False
 
     def raise_determine_action_flag(self, msg:Bool):
+        if time.time() - self.last_recv_time >= 5:
+            self.get_logger().info("Waiting for more current data")
+            self.determine_action = False
+            return None
         self.get_logger().info("self.gamestate in det_action cbk" + str(self.gamestate))
         checkgame = Game(self.gamestate)
         
@@ -228,19 +238,19 @@ class GameNode(Node):
                             if len(green_incorrect) != 0:
                                 moves += ([[i, abs(green_incorrect.pop(-1))-1, 0]] if np.sign(delta_green) == -1 else [[abs(green_incorrect.pop(-1))-1, i, 0]])
                             else:
-                                green_incorrect = [np.sign(delta_green)*(i+1)] * abs(delta_green-green_count) + green_incorrect 
+                                green_incorrect = [np.sign(delta_green)*(i+1)] * abs(delta_green-green_count) 
                                 break 
                     else:
                         green_incorrect = [np.sign(delta_green)*(i+1)] * abs(delta_green) + green_incorrect
 
-                elif brown_actual != brown_expected:
+                if brown_actual != brown_expected:
                     delta_brown = brown_expected - brown_actual
                     if len(brown_incorrect) != 0 and np.sign(delta_brown) != np.sign(brown_incorrect[-1]):
                         for brown_count in range(abs(delta_brown)):
                             if len(brown_incorrect) != 0:
                                 moves += ([[i, abs(brown_incorrect.pop(-1))-1, 1]] if np.sign(delta_brown) == -1 else [[abs(brown_incorrect.pop(-1))-1,i, 1]])
                             else:
-                                brown_incorrect = [np.sign(delta_brown)*(i+1)] * abs(delta_brown-brown_count) + brown_incorrect
+                                brown_incorrect = [np.sign(delta_brown)*(i+1)] * abs(delta_brown-brown_count)
                                 break
                     else:
                         brown_incorrect = [np.sign(delta_brown)*(i+1)] * abs(delta_brown) + brown_incorrect
@@ -289,10 +299,7 @@ class GameNode(Node):
             wait for my turn in the init position
         '''
         if self.gamestate is None:
-            self.get_logger().info("board buckets "+str(self.board_buckets))
-            self.get_logger().info("checker location "+str(self.checker_locations))
-            self.get_logger().info('no data')
-            self.pub_checker_move.publish([])
+            self.pub_checker_move.publish(UInt8MultiArray(data=[11, 11, 11]))
             return
 
         #self.get_logger().info('determine action running')
@@ -918,7 +925,7 @@ class Game:
                                 copy2.move(cur_pos, 24)
                         copy2.move(pur_cur, cur_pos)
                         nex_pos = cur_pos - dices[1]
-                        if copy2.is_valid(cur_pos, nex_pos, dices[1]) and ((nex_pos) in pur_inc) and (not gre_inc) and (not gre_dec): # if dice1 + dice2 makes a valid move
+                        if copy2.is_valid(cur_pos, nex_pos, dices[1]) and ((nex_pos) in pur_inc): # if dice1 + dice2 makes a valid move
                             dices.remove(dices[1])
                             dices.remove(dices[0])
                             print("dices is :" + str(dices))

@@ -44,6 +44,9 @@ class Render:
         self.screen.blit(flipped, (0, 0))
         self.add_text()
         pygame.display.update()
+        
+    def get(self):
+        pygame.event.get()
 
     def add_text(self):
         text = self.font.render('Roll', True, (0, 0, 0))
