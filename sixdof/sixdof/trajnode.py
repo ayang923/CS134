@@ -16,6 +16,8 @@ RATE = 100.0            # Hertz
 
 nan = float("nan")
 
+BEAROFF_BOUNDS = np.array([[1.105, 1.252], [0.138, 0.631]])
+
 def reconstruct_gamestate_array(flattened_lst):
     return np.array(flattened_lst).reshape((26, 2)).tolist() if len(flattened_lst) == 52 else None
 
@@ -115,6 +117,8 @@ class TrajectoryNode(Node):
         self.waiting_for_move = False
         self.moveready_pub = self.create_publisher(Bool, '/move_ready', 1)
 
+        self.sub_turn = self.create_subscription(Pose, '/turn', self.save_turn, 10)
+
         # Create a timer to keep calculating/sending commands.
         rate       = RATE
         self.timer = self.create_timer(1 / rate, self.sendcmd)
@@ -134,6 +138,15 @@ class TrajectoryNode(Node):
 
     def test(self, source_pos, dest_pos):
         self.task_handler.move_checker(source_pos, dest_pos)
+
+    def save_turn(self, msg):
+        # Save the detected turn signal
+        data = p_from_T(T_from_Pose(msg))
+        self.turn_signal_pos = [float(data[0]),float(data[1])]
+        if self.turn_signal_pos[1] > 0.4:
+            self.turn_signal = True
+        else:
+            self.turn_signal = False
     
     def recvcheckerlocations(self, msg):
         flattened_lst = list(msg.data)
@@ -169,9 +182,17 @@ class TrajectoryNode(Node):
         elif type(msg) is UInt8MultiArray:
             flattened_moves = list(msg.data)
             moves = list(np.array(flattened_moves).reshape((len(flattened_moves)//3, 3)))
+            self.get_logger().info("moves: " + str(moves))
             checker_location_copy = copy.deepcopy(self.checker_locations)
             for source, dest, color in moves:
+                if color == 10:
+                    if source == 0:
+                        self.task_handler.move_checker(self.turn_signal_pos, np.array([0.20,0.33]))
+                    else:
+                        self.task_handler.move_checker(self.turn_signal_pos, np.array([0.20,0.47]))
+                    continue
                 if not checker_location_copy[source][color]:
+                    self.get_logger().info("checker locations " + str(checker_location_copy[source][color]))
                     continue
                 source_pos = np.array(checker_location_copy[source][color][0])
                 if dest <= 23:
@@ -182,13 +203,39 @@ class TrajectoryNode(Node):
                             last_y = min(checker_location_copy[dest][0][0][1] if checker_location_copy[dest][0] else float('inf'), checker_location_copy[dest][1][0][1] if checker_location_copy[dest][1] else float('inf'))
                         else:
                             last_y = max(checker_location_copy[dest][0][0][1] if checker_location_copy[dest][0] else -float('inf'), checker_location_copy[dest][1][0][1] if checker_location_copy[dest][1] else -float('inf'))
-                        dest_pos = np.array([self.grid_centers[dest][0][0], last_y + (-1 if dest <= 11 else 1)*0.05])
+                        dest_pos = np.array([self.grid_centers[dest][0][0], last_y + (-1 if dest <= 11 else 1)*0.045])
                 elif dest == 24:
-                    checkers_in_bar = len(checker_location_copy[dest][0]) + len(checker_location_copy[dest][1])
-                    if checkers_in_bar < 6:
-                        dest_pos = self.grid_centers[dest][checkers_in_bar]
-                    else:
+                    if len(checker_location_copy[dest][0]) + len(checker_location_copy[dest][1]) > 6:
                         continue
+
+                    if color == 0:
+                        if len(checker_location_copy[dest][0]) == 0:
+                            dest_pos = self.grid_centers[dest][-2]
+                            self.get_logger().info("grid centers " + str(self.grid_centers))
+                            self.get_logger().info("grid center")
+                        else:
+                            last_y = checker_location_copy[dest][0][0][1]
+                            dest_pos = np.array([self.grid_centers[dest][0][0], last_y + 0.045])
+
+                    else:
+                        if len(checker_location_copy[dest][1]) == 0:
+                            dest_pos = self.grid_centers[dest][0]
+                            
+                        else:
+                            last_y = checker_location_copy[dest][1][0][1]
+                            dest_pos = np.array([self.grid_centers[dest][0][0], last_y - 0.045])
+                else:
+                    while True:
+                        dest_pos = np.array([np.random.uniform(low=BEAROFF_BOUNDS[0, 0], high=BEAROFF_BOUNDS[0, 1]), np.random.uniform(low=BEAROFF_BOUNDS[1, 0], high=BEAROFF_BOUNDS[1, 1])])
+                        for checker_location in checker_location_copy[dest][0]:
+                            if np.linalg.norm(dest_pos - checker_location) >= 0.4:
+                                continue
+                        for checker_location in checker_location_copy[dest][1]:
+                            if np.linalg.norm(dest_pos - checker_location) >= 0.4:
+                                continue
+                        
+                        break
+                        
                 checker_location_copy[source][color].pop(0)
                 checker_location_copy[dest][color].insert(0, dest_pos)
                 self.task_handler.move_checker(source_pos, dest_pos)
@@ -220,18 +267,18 @@ class TrajectoryNode(Node):
 
         for i in np.arange(6):
             x = cx + L/2 - dL0 - i*dL
-            y = cy + H/2 - dH/2 - 2.5*dH
+            y = cy + H/2 - dH/2 - 2.5*dH - 0.01
             centers[i] = [x,y]
             for j in np.arange(6):
-                y = cy + H/2 - dH/2 - j*dH
+                y = cy + H/2 - dH/2 - j*dH - 0.01
                 grid[i][j] = [x,y]
 
         for i in np.arange(6,12):
             x = cx + L/2 - dL0 - dL1 - i*dL
-            y = cy + H/2 - dH/2 - 2.5*dH
+            y = cy + H/2 - dH/2 - 2.5*dH - 0.01
             centers[i] = [x,y]
             for j in np.arange(6):
-                y = cy + H/2 - dH/2 - j*dH
+                y = cy + H/2 - dH/2 - j*dH - 0.01
                 grid[i][j] = [x,y]
             
         for i in np.arange(12,18):
@@ -245,10 +292,10 @@ class TrajectoryNode(Node):
     
         for i in np.arange(18,24):
             x = cx + L/2 - dL0 - (23-i)*dL
-            y = cy - H/2 + dH/2 + 2.5*dH
+            y = cy - H/2 + dH/2 + 2.5*dH - 0.01
             centers[i] = [x,y]
             for j in np.arange(6):
-                y = cy - H/2 + dH/2 + j*dH
+                y = cy - H/2 + dH/2 + j*dH - 0.01
                 grid[i][j] = [x,y]
                 
         x = cx + L/2 - dL0 - 5*dL - (dL1+dL)/2

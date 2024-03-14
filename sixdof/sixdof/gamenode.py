@@ -15,6 +15,7 @@
 
 from geometry_msgs.msg  import Pose, PoseArray
 from std_msgs.msg import UInt8MultiArray, Bool
+from collections.abc import Iterable
 
 from enum import Enum
 
@@ -50,6 +51,13 @@ BEAR_OFF = [[0,3], [0,3], [0,3], [0,3], [0,3], [0,0],
                      [0,0], [0,0], [0,0], [0,0], [0,0], [0,0],
                      [0,0], [3,0], [3,0], [3,0], [3,0], [3,0],
                      [0,0], [0,0]]
+
+def flatten_list(xs):
+    for x in xs:
+        if isinstance(x, Iterable) and not isinstance(x, (str, bytes)):
+            yield from flatten_list(x)
+        else:
+            yield x
                      
 
 def reconstruct_gamestate_array(flattened_lst):
@@ -59,18 +67,6 @@ def reconstruct_gamestate_array(flattened_lst):
 class GameNode(Node):
     def __init__(self, name):
         super().__init__(name)
-        
-        # /boardpose from Detector
-        self.sub_board = self.create_subscription(Pose, '/boardpose',
-                                                                  self.recvboard, 3)
-
-        # Poses of all detected green checkers, /green from Detector
-        self.sub_green = self.create_subscription(PoseArray, '/green',
-                                                                  self.recvgreen, 3)
-
-        # Poses of all detected brown checkers, /brown from Detector
-        self.sub_brown = self.create_subscription(PoseArray, '/brown',
-                                                                  self.recvbrown, 3)
 
         # /dice Unsigned int array with value of two detected dice from Detector
         self.sub_dice = self.create_subscription(UInt8MultiArray, '/dice',
@@ -90,35 +86,21 @@ class GameNode(Node):
         self.determining = False
         
         self.pub_clear = self.create_publisher(Bool, '/clear', 10)
-        self.pub_checker_move = self.create_publisher(PoseArray, '/checker_move', 10)
+        self.pub_checker_move = self.create_publisher(UInt8MultiArray, '/checker_move', 10)
         self.pub_dice_roll = self.create_publisher(PoseArray, '/dice_roll', 10)
         self.dice_publisher = self.create_publisher(Image, '/dice_roll_image', 10)
         self.dice_image_timer = self.create_timer(1, self.publish_dice_roll)
         self.bridge = CvBridge()
-
-        # Physical Game Board Info
-        self.board_x = None
-        self.board_y = None
-        self.board_theta = None # radians
-        self.board_buckets = None # center locations [x,y]
-        self.grid_centers = None # for placing
 
         # Choose initial state
         # Initial gamestate area assumes setup for beginning of game
         # each element indicates [num_green, num_brown]
         # beginning to end of array progresses ccw from robot upper right.
         # last item is middle bar
-        self.gamestate = STANDARD
-
-        # each entry has a list of [x,y] positions of the checkers in that bar
-        self.checker_locations = None
+        self.gamestate = None
         
         self.scored = 0
 
-        # self.recvgreen populates these arrays with detected green checker pos
-        self.greenpos = None
-        # self.recvbrown populates these arrays with detected brown checker pos
-        self.brownpos = None
         # self.recvdice populates this with detected [die1_int, die2_int]
         self.dice = []
         # self.save turn populates this with turn indicator position
@@ -133,21 +115,13 @@ class GameNode(Node):
         self.determine_action_flag = False # True if the robot is ready for new action, false after actions sent. /move_ready Bool sets to True again
         self.first_human_turn_report = False # logging flag
 
-        # Source and destination info
-        self.repeat_source = 0
-        self.repeat_dest = 0
-
-        self.curr_move_src_counter = self.clear_move_counter()
-        self.curr_move_dest_counter = self.clear_move_counter()
-
-        self.curr_move_checker_pushes = self.empty_checker_count()
-        self.curr_move_tops = self.empty_checker_count()
-
         # Game engine
-        self.game = Game(self.gamestate)
-        # self.render = Render(self.game)
-        # self.render.draw()
-        # self.render.update()
+        self.game = Game(STANDARD)
+        self.display_on = True
+        if self.display_on:
+            self.render = Render(self.game)
+            self.render.draw()
+            self.render.update()
     
     def recvstate(self, msg: UInt8MultiArray):
         flattened_lst = list(msg.data)
@@ -162,48 +136,6 @@ class GameNode(Node):
         source, dest = msg.data[0], msg.data[1]
 
         self.execute_normal(source, dest)
-
-    def recvboard(self, msg):
-        '''
-        create / update belief of where the boards are based on most recent
-        /boardpose msg
-
-        in: /boardpose PoseArray
-        updates self.boardpose
-        '''
-        self.save_board_dims(msg)
-        self.update_centers()
-
-    def recvgreen(self, msg:PoseArray):
-        '''
-        given most recent batch of green positions and board pose, update
-        self.greenpos, self.logoddsgrid, and self.gamestate
-
-        in: /green PoseArray
-
-        updates:
-        self.greenpos (extract xy positions only from most recent processed frame's
-        PoseArray /green and refresh self.greenpos),
-        self.logoddsgrid (log odds of grid spaces being occupied) using update_log_odds(),
-        and self.gamestate (actionable game state representation)
-        '''
-        self.greenpos = []
-        for pose in msg.poses:
-            xy = [pose.position.x, pose.position.y]
-            self.greenpos.append(xy)
-        self.greenpos = np.array(self.greenpos)
-        self.sort_checkers()
-
-    def recvbrown(self, msg:PoseArray):
-        '''
-        same as above, but for brown
-        '''
-        self.brownpos = []
-        for pose in msg.poses:
-            xy = [pose.position.x, pose.position.y]
-            self.brownpos.append(xy)
-        self.brownpos = np.array(self.brownpos)
-        self.sort_checkers()
 
     def recvdice(self, msg):
         '''
@@ -228,57 +160,52 @@ class GameNode(Node):
         else:
             self.turn_signal = False
 
-    def save_board_dims(self, msg:Pose):
-        self.board_x = msg.position.x
-        self.board_y = msg.position.y
-        R = R_from_T(T_from_Pose(msg))
-        t = np.arctan2(R[1,0],R[0,0]) # undo rotz
-        self.board_theta = t
-
     def raise_determine_action_flag(self, msg:Bool):
-        # self.get_logger().info("self.gamestate in det_action cbk" + str(self.gamestate))
-        # checkgame = Game(self.gamestate)
+        self.get_logger().info("self.gamestate in det_action cbk" + str(self.gamestate))
+        checkgame = Game(self.gamestate)
         
-        # green_fixes, brown_fixes = self.fix_board(checkgame.state, self.game.state)
-        # self.get_logger().info('fixes in raise_det_action_flag callback' + str(green_fixes) + str(brown_fixes))
+        fixes = self.fix_board(checkgame.state, self.game.state)
+        self.get_logger().info('fixes in raise_det_action_flag callback' + str(fixes))
 
-        # if self.firstmove and not self.turn_signal:
-        #     self.publish_checker_move(self.turn_signal_pos, [0.20, 0.47])
-        #     self.determine_action = False
-        #     return None
+        if self.firstmove and not self.turn_signal:
+            self.publish_checker_move([1, 0, 10])
+            self.determine_action = False
+            return None
 
-        # if self.turn_signal and (brown_fixes or green_fixes):
-        #     self.execute_fixes(green_fixes, brown_fixes, checkgame)
-        #     self.determine_action_flag = False
+        if self.turn_signal and not fixes and (True if self.game.turn==1 else False) != self.turn_signal:
+            if (True if self.game.turn==1 else False) != self.turn_signal:
+                self.publish_checker_move([0, 1, 10])
+                self.determine_action_flag = False
+        elif self.turn_signal and fixes:
+            self.execute_fixes(fixes)
+            self.determine_action_flag = False
 
-        #     if (True if self.game.turn==1 else False) != self.turn_signal:
-        #         self.publish_checker_move(self.turn_signal_pos, self.turn_signal_dest)
-        #         self.determine_action_flag = False
+            if (True if self.game.turn==1 else False) != self.turn_signal:
+                self.publish_checker_move([0, 1, 10])
+                self.determine_action_flag = False
             
-        # else:
-        #     self.determine_action_flag = msg.data
-        self.determine_action_flag = False # comment out for not debugs
+        else:
+            self.determine_action_flag = msg.data
 
     def fix_board(self, actual_state, expected_state):
         actual_state_copy = copy.deepcopy(actual_state)
         expected_state_copy = copy.deepcopy(expected_state)
         green_incorrect = []
         brown_incorrect = []
-        green_moves = []
-        brown_moves = []
+        moves = []
 
         for i, (triangle_actual, triangle_expected) in enumerate(zip(actual_state_copy[:24], expected_state_copy[:24])):
             if np.sign(triangle_actual) == np.sign(triangle_expected)*-1:
                 if np.sign(triangle_actual) > 0:
-                    green_moves.append([i, 24] * abs(triangle_actual))
+                    moves += ([[i, 25, 0]]* abs(triangle_actual))
                     actual_state_copy[i] = 0
-                    actual_state_copy[24][0] += abs(triangle_actual)
+                    actual_state_copy[25][0] += abs(triangle_actual)
                 elif np.sign(triangle_actual) < 0:
-                    brown_moves.append([i, 24] * abs(triangle_actual))
+                    moves += ([[i, 25, 1]] * abs(triangle_actual))
                     actual_state_copy[i] = 0
-                    actual_state_copy[24][1] += abs(triangle_actual)
+                    actual_state_copy[25][1] += abs(triangle_actual)
 
-        for i, (triangle_actual, triangle_expected) in enumerate(zip(actual_state_copy[:25], expected_state_copy[:25])):
+        for i, (triangle_actual, triangle_expected) in enumerate(zip(actual_state_copy, expected_state_copy)):
             # print(triangle_actual)
             # print(triangle_expected)
             # print(i)
@@ -297,21 +224,27 @@ class GameNode(Node):
                 if green_actual != green_expected:
                     delta_green = green_expected - green_actual
                     if len(green_incorrect) != 0 and np.sign(delta_green) != np.sign(green_incorrect[-1]):
-                        for _ in range(abs(delta_green)):
+                        for green_count in range(abs(delta_green)):
                             if len(green_incorrect) != 0:
-                                green_moves.append([i, abs(green_incorrect.pop(-1))-1] if np.sign(delta_green) == -1 else [abs(green_incorrect.pop(-1))-1, i])
+                                moves += ([[i, abs(green_incorrect.pop(-1))-1, 0]] if np.sign(delta_green) == -1 else [[abs(green_incorrect.pop(-1))-1, i, 0]])
+                            else:
+                                green_incorrect = [np.sign(delta_green)*(i+1)] * abs(delta_green-green_count) + green_incorrect 
+                                break 
                     else:
                         green_incorrect = [np.sign(delta_green)*(i+1)] * abs(delta_green) + green_incorrect
 
                 elif brown_actual != brown_expected:
                     delta_brown = brown_expected - brown_actual
                     if len(brown_incorrect) != 0 and np.sign(delta_brown) != np.sign(brown_incorrect[-1]):
-                        for _ in range(abs(delta_brown)):
+                        for brown_count in range(abs(delta_brown)):
                             if len(brown_incorrect) != 0:
-                                brown_moves.append([i, abs(brown_incorrect.pop(-1))-1] if np.sign(delta_brown) == -1 else [abs(brown_incorrect.pop(-1))-1,i])
+                                moves += ([[i, abs(brown_incorrect.pop(-1))-1, 1]] if np.sign(delta_brown) == -1 else [[abs(brown_incorrect.pop(-1))-1,i, 1]])
+                            else:
+                                brown_incorrect = [np.sign(delta_brown)*(i+1)] * abs(delta_brown-brown_count) + brown_incorrect
+                                break
                     else:
                         brown_incorrect = [np.sign(delta_brown)*(i+1)] * abs(delta_brown) + brown_incorrect
-        return green_moves, brown_moves
+        return moves
     
     def publish_dice_roll(self):
         width, height = 640, 480
@@ -321,154 +254,15 @@ class GameNode(Node):
         if self.game.dice is not None:
             dice_roll = str(self.game.dice[0]) + ',' + str(self.game.dice[1])
             cv2.putText(dice_img, dice_roll, (50, 300), font, font_scale, (255, 255, 255), 6, cv2.LINE_AA)
+        if self.turn_signal:
+            cv2.putText(dice_img, "Robot Turn", (25, 300), font, font_scale, (0, 255, 0), 5, cv2.LINE_AA)
+        else:
+            cv2.putText(dice_img, "Human Turn", (25, 300), font, font_scale, (128, 0, 128), 5, cv2.LINE_AA)
+        #if self.correction_notif:
+        #    cv2.putText(dice_img, "Redo move, play correctly!", (100, 300), font, font_scale, (255, 255, 255), 5, cv2.LINE_AA)
 
         dice_roll_image = self.bridge.cv2_to_imgmsg(dice_img, encoding='bgr8')
         self.dice_publisher.publish(dice_roll_image)
-
-    def update_centers(self):
-        centers = np.zeros((25,2))
-        grid = np.zeros((25,6,2))
-        
-        # board dimensions (all in m):
-
-        cx = self.board_x
-        cy = self.board_y
-
-        L = 1.061 # board length
-        H = 0.536 # board width
-        dL = 0.067 # triangle to triangle dist
-        dH = 0.045 # checker to checker stack dist
-
-        dL0 = 0.235 # gap from blue side to first triangle center
-        dL1 = 0.117 - dL # gap between two sections of triangles (minus dL)
-
-        for i in np.arange(6):
-            x = cx + L/2 - dL0 - i*dL
-            y = cy + H/2 - dH/2 - 2.5*dH
-            centers[i] = [x,y]
-            for j in np.arange(6):
-                y = cy + H/2 - dH/2 - j*dH
-                grid[i][j] = [x,y]
-
-        for i in np.arange(6,12):
-            x = cx + L/2 - dL0 - dL1 - i*dL
-            y = cy + H/2 - dH/2 - 2.5*dH
-            centers[i] = [x,y]
-            for j in np.arange(6):
-                y = cy + H/2 - dH/2 - j*dH
-                grid[i][j] = [x,y]
-            
-        for i in np.arange(12,18):
-            x = cx + L/2 - dL0 - dL1 - (23-i)*dL
-            y = cy - H/2 + dH/2 + 2.5*dH
-            centers[i] = [x,y]
-            for j in np.arange(6):
-                y = cy - H/2 + dH/2 + j*dH
-                grid[i][j] = [x,y]                
-
-    
-        for i in np.arange(18,24):
-            x = cx + L/2 - dL0 - (23-i)*dL
-            y = cy - H/2 + dH/2 + 2.5*dH
-            centers[i] = [x,y]
-            for j in np.arange(6):
-                y = cy - H/2 + dH/2 + j*dH
-                grid[i][j] = [x,y]
-                
-        x = cx + L/2 - dL0 - 5*dL - (dL1+dL)/2
-        y = cy
-        centers[24] = [x,y] # bar
-        for j in range_middle_out(0,5):
-            y = cy + 2.5*dH - j*dH
-            grid[24][j] = [x,y]
-        
-        rotated_centers = np.zeros((25,2))
-        rotated_grid_centers = np.zeros((25,6,2))
-        theta = self.board_theta
-        for i in np.arange(25):
-            x = centers[i][0]*np.cos(theta) - centers[i][1]*np.sin(theta)
-            y = centers[i][0]*np.sin(theta) + centers[i][1]*np.cos(theta)
-            rotated_centers[i] = [x,y]
-            for j in np.arange(6):
-                x = grid[i][j][0]*np.cos(theta) - grid[i][j][1]*np.sin(theta)
-                y = grid[i][j][0]*np.sin(theta) + grid[i][j][1]*np.cos(theta)
-                rotated_grid_centers[i][j] = [x,y]
-
-        self.board_buckets = rotated_centers
-        self.grid_centers = rotated_grid_centers
-
-    def sort_checkers(self):
-        checker_locations = self.empty_checker_count() # last two are bar and unsorted
-        
-        if self.greenpos is None or self.brownpos is None or self.board_buckets is None:
-            # self.get_logger().info("green pos " + str(self.greenpos))
-            # self.get_logger().info("brown pos " + str(self.brownpos))
-            # self.get_logger().info("board buckets " + str(self.board_buckets))
-            return
-
-        for green in self.greenpos:
-            in_triangle = False
-            for bucket in self.board_buckets:
-                xg = green[0]
-                yg = green[1]
-                xmin = bucket[0] - 0.03
-                xmax = bucket[0] + 0.03
-                ymin = bucket[1] - 0.13
-                ymax = bucket[1] + 0.13
-                bucket_ind = np.where(self.board_buckets == bucket)[0][0]
-                if ((xg >= xmin and xg <= xmax) and (yg >= ymin and yg <= ymax)):
-                    checker_locations[bucket_ind][0].append(green)
-                    in_triangle = True
-            if not in_triangle:
-                checker_locations[25][0].append(green)
-
-        for brown in self.brownpos:
-            in_triangle = False
-            for bucket in self.board_buckets:
-                xb = brown[0]
-                yb = brown[1]
-                xmin = bucket[0] - 0.03
-                xmax = bucket[0] + 0.03
-                ymin = bucket[1] - 0.13
-                ymax = bucket[1] + 0.13
-                bucket_ind = np.where(self.board_buckets == bucket)[0][0]
-                if ((xb >= xmin and xb <= xmax) and (yb >= ymin and yb <= ymax)):
-                    checker_locations[bucket_ind][1].append(brown)
-                    in_triangle= True
-            if not in_triangle:
-                checker_locations[25][1].append(brown)
-
-        # Check that we have the right amount of checkers!
-
-        total = 0
-        for i in np.arange(25):
-            greencount = len(checker_locations[i][0])
-            browncount = len(checker_locations[i][1])
-            if (greencount != 0 and browncount !=0) and i != 24:
-                self.two_colors_row = True # raise flag that a row has more than one color (not bar)
-            total += greencount + browncount
-        total += self.scored
-        if total != 30:
-            if total + len(checker_locations[25][0]) + len(checker_locations[25][1]) == 30:
-                self.out_of_place = True # raise flag that a checker is mispositioned wrt the triangles
-            else:
-                return None # don't update, something is changing/blocked        
-        for i in np.arange(25):
-            greencount = len(checker_locations[i][0])
-            browncount = len(checker_locations[i][1])            
-            self.gamestate[i] = [greencount,browncount] # this will only be updated if none of the above flags were raised.
-            # if a flag was raised, we must have the last gamestate stored.
-
-        # TODO Need to implement the 25th row
-        for triangle in range(25):
-            if triangle <= 11:
-                checker_locations[triangle][0] = sorted(checker_locations[triangle][0], key=lambda x: x[1])
-                checker_locations[triangle][1] = sorted(checker_locations[triangle][1], key=lambda x: x[1])
-
-            elif triangle <=24:
-                checker_locations[triangle][0] = sorted(checker_locations[triangle][0], key=lambda x: x[1], reverse=True)
-                checker_locations[triangle][1] = sorted(checker_locations[triangle][1], key=lambda x: x[1], reverse=True)
-        self.checker_locations = checker_locations
 
     def determine_action(self):
         '''
@@ -491,11 +285,11 @@ class GameNode(Node):
         else:
             wait for my turn in the init position
         '''
-        if self.board_buckets is None or self.checker_locations is None:
+        if self.gamestate is None:
             self.get_logger().info("board buckets "+str(self.board_buckets))
             self.get_logger().info("checker location "+str(self.checker_locations))
             self.get_logger().info('no data')
-            self.pub_checker_move.publish(PoseArray())
+            self.pub_checker_move.publish([])
             return
 
         #self.get_logger().info('determine action running')
@@ -525,8 +319,9 @@ class GameNode(Node):
 
         self.get_logger().info('game turn' + str(self.game.turn))
         self.get_logger().info('self.game.dice: ' +  str(self.game.dice))
-        self.get_logger().info('legal next states' + str(self.game.legal_next_states(self.game.dice)))
-        if ((checkgame.state in self.game.legal_next_states(self.game.dice)) or self.firstmove or not self.changed): # Check that self.gamestate is a legal progression from last state given roll
+        self.get_logger().info("previous self.gamestate from get gamestate: " + str(self.game.get_gamestate()))
+        self.get_logger().info("Legal next states:" + str(self.game.legal_next_states(self.game.get_gamestate(), self.gamestate,self.game.dice)))
+        if ((self.game.legal_next_states(self.game.get_gamestate(), self.gamestate,self.game.dice)) or self.firstmove or not self.changed): # Check that self.gamestate is a legal progression from last state given roll
             # FIXME: remove "or True" if we can get legal states working
             if self.firstmove:
                 self.firstmove = False
@@ -535,44 +330,33 @@ class GameNode(Node):
             
             self.game.set_state(self.gamestate) # update game.state
             moves = self.handle_turn(self.game) # roll dice and decide moves (with new gamestate)
-            # self.render.draw()
-            # self.render.update()
             self.get_logger().info("After Handle Turn Game state is" + str(self.game.state))
 
             # Debugs
             self.get_logger().info("Robot turn dice roll: {}".format(self.game.dice))
             # TODO: publish dice roll display to ipad through topic?
             self.get_logger().info("Robot chosen Moves: {}".format(moves))
-
-            sources = []
-            dests = []
+            
+            move_list = []
             for move in moves:
                 source, dest = move[0], move[1]
-                # if source in dests: go to hardcoded center number (repeat - 1) of row source
-                self.repeat_source = sources.count(source) 
-                self.repeat_dest = dests.count(dest) 
-                sources.append(source)
-                dests.append(dest)
-                self.get_logger().info("Moving from {} to {}".format(source, dest))
-                self.get_logger().info("Source number"+str((self.game.state[source])))
-                self.get_logger().info("Dest number" + str(self.game.state[dest]))
                 if source == 24:
-                    if (np.sign(self.game.state[source][0]) != np.sign(self.game.state[dest]) and 
-                    self.game.state[dest] != 0):
+                    if (np.sign(self.game.state[dest]) == -1):
                         self.get_logger().info("Hit off bar!!")
-                        self.execute_hit(source, dest)
+                        move_list += self.execute_hit(source, dest)
                     else:
-                        self.execute_normal(source, dest)
+                        move_list += self.execute_normal(source, dest, 0)
                 elif dest == 25: #moving off game with bear off
-                    self.execute_bear_off(source)
+                    move_list += self.execute_bear_off(source)
                 elif (np.sign(self.game.state[source]) != np.sign(self.game.state[dest]) and 
                     self.game.state[dest] != 0):
                     self.get_logger().info("Hit!!")
-                    self.execute_hit(source, dest)
+                    move_list += self.execute_hit(source, dest)
                 else:
-                    self.execute_normal(source, dest)
+                    move_list += self.execute_normal(source, dest, 0)
             self.get_logger().info('game.state after sending moves: ' + str(self.game.state))
-            self.publish_checker_move(self.turn_signal_pos,self.turn_signal_dest) # move the turn signal to indicate human turn
+            self.publish_checker_move(move_list)
+            self.publish_checker_move([0, 1, 10]) # move the turn signal to indicate human turn
             self.game.turn *= -1 # if we get here, we moved the turn signal! From robot turn to human turn TODO maybe need to handle missing the turn signal differently?
             self.determine_action_flag = False
             self.game.roll() # next roll (for human)
@@ -586,57 +370,24 @@ class GameNode(Node):
         else:
             self.get_logger().info('Fixing board!!')
             checkgame = Game(self.gamestate)
-            green_fixes, brown_fixes = self.fix_board(checkgame.state, self.game.state) # here, we use the old state as the "expected" and just return to that old state
-            self.get_logger().info('fixes in determine action' + str(brown_fixes + green_fixes))
-            self.execute_fixes(green_fixes, brown_fixes, checkgame)
-            self.publish_checker_move(self.turn_signal_pos,self.turn_signal_dest) # move the turn signal to indicate human has to re-play
+            fixes = self.fix_board(checkgame.state, self.game.state) # here, we use the old state as the "expected" and just return to that old state
+            self.get_logger().info('fixes in determine action' + str(fixes))
+            self.execute_fixes(fixes)
+            self.publish_checker_move([0, 1, 10]) # move the turn signal to indicate human has to re-play
+            self.dice
             self.get_logger().info("Please Play Correctly!!")
             self.get_logger().info("Redo Move with Dice: " + str(self.game.dice))
             self.get_logger().info("self.game turn check" + str(self.game.turn))
             self.determine_action_flag = False
 
         #self.get_logger().info("Gamestate:"+str(self.game.state))
-    def execute_fixes(self, green_moves, brown_moves, checkgame):
-        sources = []
-        dests = []
-
-        self.repeat_source = 0
-        self.repeat_dest = 0
-        for (source,dest) in green_moves:
+    def execute_fixes(self, moves):
+        move_list = []
+        for (source, dest, color) in moves:
             # if source in dests: go to hardcoded center number (repeat - 1) of row source
-            self.repeat_source = sources.count(source) + sources.count(dest)
-            self.repeat_dest = dests.count(dest) + dests.count(source)
-            sources.append(source)
-            dests.append(dest)
-            self.get_logger().info("Moving from {} to {}".format(source, dest))
-            self.get_logger().info("Source number"+str((checkgame.state[source])))
-            self.get_logger().info("Dest number" + str(checkgame.state[dest]))
-            self.execute_normal(source, dest, change_game=False, simulate_change_game=checkgame, turn=0)
-
-        self.repeat_source = 0
-        self.repeat_dest = 0
-        sources = []
-        dest = []
-        for (source,dest) in brown_moves:
-            reversed_state = [-triangle if i <= 23 else triangle for i, triangle in enumerate(checkgame.state)]
-            checkgame.state = reversed_state
-            # if source in dests: go to hardcoded center number (repeat - 1) of row source
-            self.repeat_source = sources.count(source) + sources.count(dest)
-            self.repeat_dest = dests.count(dest) + dests.count(source)
-            sources.append(source)
-            dests.append(dest)
-            self.get_logger().info("Moving from {} to {}".format(source, dest))
-            self.get_logger().info("Source number"+str((checkgame.state[source])))
-            self.get_logger().info("Dest number" + str(checkgame.state[dest]))
-            self.execute_normal(source, dest, change_game=False, simulate_change_game=checkgame, turn=1)
-                
-
-    def empty_checker_count(self):
-        return [[[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
-                [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
-                [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
-                [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
-                [[],[]], [[],[]]]
+            move_list += self.execute_normal(source, dest, color, change_game=False)
+        
+        self.publish_checker_move(move_list)
 
     def get_changed_bounds(self, checkgame):
         low_row = 0
@@ -677,65 +428,36 @@ class GameNode(Node):
 
     #     self.publish_checker_move(source_pos, dest_pos)
 
-    def execute_bear_off(self, source, change_game=True, simulate_change_game=None, turn=None):
-        if turn is None:
-            turn = 0 if self.game.turn == 1 else 1
-
-        source_pos = self.last_checker(source, turn, self.repeat_source)
-        dest_pos = [0.5, 0.3]
-
+    def execute_bear_off(self, source, change_game=True):
+        color = 0 if self.game.turn == 1 else 0
         if change_game:
             self.game.move(source, 25)
-        
-        if simulate_change_game is not None:
-            simulate_change_game.move(source, 25)
+            if self.display_on:
+                self.render.draw()
+                self.render.update()
 
-        self.publish_checker_move(source_pos, dest_pos)
+        return [source, 25, color]
     
-    def execute_hit(self, source, dest, change_game=True, simulate_change_game=None, turn=None):
-        # self.game.turn == 1 during robot (green) turn
-        if turn is None:
-            turn = 1 if self.game.turn == 1 else 0
-        bar = 24
-        
-        dest_centers = self.grid_centers[dest]
-
-        # there is a problem here with how the new last checkers work 
-        source_pos_1 = self.last_checker(dest, turn, repeat=0) # grab solo checker
-        dest_pos = self.next_free_place(bar, turn, repeat=0)
+    def execute_hit(self, source, dest, change_game=True):
+        color = 0 if self.game.turn == 1 else 0
 
         if change_game:
-            self.game.move(dest,bar) # move oppo checker to bar in game.state
-        if simulate_change_game is not None:
-            simulate_change_game.move(dest, bar)
-
-        self.publish_checker_move(source_pos_1, dest_pos) # publish move
-        turn = 0 if self.game.turn == 1 else 1
-
-        source_pos = self.last_checker(source, turn, self.repeat_source) # grab my checker
-        dest_pos = source_pos_1 # and move where I just removed
-
-        if change_game:
+            self.game.move(dest, 24) # move oppo checker to bar in game.state
             self.game.move(source,dest) # move my checker to destination in game.state
-        if simulate_change_game is not None:
-            simulate_change_game.move(source, dest)
+            if self.display_on:
+                self.render.draw()
+                self.render.update()            
 
-        self.publish_checker_move(source_pos, dest_pos)
+        return [[dest, 24, 0 if color == 1 else 1], [source, dest, color]]
 
-    def execute_normal(self, source, dest, change_game=True, simulate_change_game=None, turn=None):        
-        if turn is None:
-            turn = 0 if self.game.turn == 1 else 1
-
-        source_pos = self.last_checker(source,turn,self.repeat_source)
-        dest_pos = self.next_free_place(dest,turn,self.repeat_dest)
-        self.get_logger().info("source_pos: " + str(source_pos))
-
+    def execute_normal(self, source, dest, color, change_game=True):        
         if change_game:
-            self.game.move(source,dest)
-        if simulate_change_game is not None:
-            simulate_change_game.move(source, dest)
+            self.game.move(source, dest)
+            if self.display_on:
+                self.render.draw()
+                self.render.update()
 
-        self.publish_checker_move(source_pos, dest_pos)
+        return [[source, dest ,color]]
     
     def choose_move(self, game, moves):
         #print("Legal moves: {}".format(moves))
@@ -863,62 +585,9 @@ class GameNode(Node):
             #print("Moves in handle turn:", final_moves)
 
         return final_moves
-
-    def next_free_place(self,row,color,repeat):
-        # color is 0 or 1 for the turn, ie green 0 brown 1
-        positions = self.grid_centers[row]
-        occupied_num = self.gamestate[row][color] # debug: tthe gamestate is not updated to move this while fixing the board    
-        self.get_logger().info("Occupied number is:" + str(occupied_num))
-        self.get_logger().info("Repeat in nfp:" + str(repeat))
-        self.get_logger().info("Checker locatiins:" + str(self.checker_locations[row][color]))
-        if row <= 11:
-            sign = -1
-        elif row <= 23:
-            sign = 1
-        elif row == 24: # the bar and the bear off
-            occupied_num += self.gamestate[row][0 if color == 1 else 1] # consider number of spots occupied by both green and purple
-            
-        if occupied_num == 0:
-            pos =  positions[repeat]
-        else:
-            last = self.checker_locations[row][color][0]
-            pos =  [last[0],last[1] + (1+ repeat) * sign * 0.050]
-        self.get_logger().info("Next free place position:" + str(pos))
-        return pos 
-
-
-    def last_checker(self,row,color,repeat):
-        '''
-        Get the [x,y] of the last checker in the row (closest to middle)
-        Repeat should be set to zero if the row is not accessed more then
-        once in one players turn
-        '''
-        if self.checker_locations is None:
-            return
-        self.get_logger().info('checker locations' + str(self.checker_locations[row][color]))
-        if row <= 11:
-            sorted_positions = sorted(self.checker_locations[row][color], key=lambda x: x[1])
-        elif row <=24:
-            sorted_positions = sorted(self.checker_locations[row][color], key=lambda x: x[1], reverse=True)
-        #self.get_logger().info("Repeat:"+str(repeat))
-        #self.get_logger().info("sorted_pos"+str(sorted_positions))
-        # When the position is the bar
-            
-        if not sorted_positions: # if an empty row because we moved a checker into a place where there was previosly 0
-            # catching two different situations:
-            # 1. in a hit
-            # 2. consecutive moves: 
-            return self.grid_centers[row][repeat] # be aware this may not work in both situations?
-        self.get_logger().info("Repeat in last checkers:" + str(repeat))
-        self.get_logger().info("Choosen position:" + str(sorted_positions[repeat]))
-        return sorted_positions[repeat]
     
-    def publish_checker_move(self, source, dest):
-        msg = PoseArray()
-        for xy in [source, dest]:
-            p = pxyz(xy[0],xy[1],0.01)
-            R = Reye()
-            msg.poses.append(Pose_from_T(T_from_Rp(R,p)))
+    def publish_checker_move(self, moves):
+        msg = UInt8MultiArray(data=list(flatten_list(moves)))
         self.pub_checker_move.publish(msg)
 
     def publish_clear(self):
@@ -946,8 +615,8 @@ class Game:
     def set_state(self, gamestate):
         self.state = []
         # BAR USED AGAIN AS GAME STATE 24
-        self.bar = gamestate[24]
-        self.off = gamestate[25]
+        self.bar = copy.deepcopy(gamestate[24])
+        self.off = copy.deepcopy(gamestate[25])
         for point in gamestate[:24]:
             # If the column has a green
             if point[0]:
@@ -958,6 +627,17 @@ class Game:
         self.state.append(self.bar)
         self.state.append(self.off)
         #self.state = np.append(self.state[11::], self.state[:11:]).tolist()
+    
+    def get_gamestate(self):
+        gamestate = []
+        for row in self.state[:24]:
+            if row <= -1:
+                gamestate.append([0,abs(row)])
+            else:
+                gamestate.append([row,0])
+        gamestate.append(self.state[24])
+        gamestate.append(self.state[25])
+        return gamestate
 
     def roll(self):
         self.dice = np.random.randint(1, 7, size = 2).tolist()
@@ -1158,7 +838,7 @@ class Game:
         return moves
 
     def legal_next_states(self, prev_states, cur_states, dice):
-        pass
+        print("Legal Next States started")
         dices = []
         pur_inc = []
         pur_dec = []
@@ -1178,55 +858,271 @@ class Game:
             if row1[0] != row2[0]: # comparing green checkers in each row
                 if row1[0] > row2[0]:
                     for j in range(abs(row1[0]-row2[0])):                
-                        gre_dec.append[row]
+                        gre_dec.append(row)
                 else:
                     for j in range(abs(row2[0]-row1[0])):
-                        gre_inc.append[row]
+                        gre_inc.append(row)
                 
             if row1[1] != row2[1]: # comparing purple checkers
                 if row1[1] > row2[1]:
                     for j in range(abs(row1[1]-row2[1])):
-                        pur_dec.append[row]
+                        pur_dec.append(row)
                 else:
                     for j in range(abs(row2[1]-row1[1])):
-                        pur_inc.append[row]
+                        pur_inc.append(row)
             row += 1
             
         if (not pur_inc or not pur_dec) and (gre_dec or gre_inc):
+            print("error with no purple move only green")
             return False
         
+        copy1 = copy.deepcopy(self)
+        print("Increased purple rows:" + str(pur_inc))
+        print("Decreased purple rows:" + str(pur_dec))
+        print("Increased green rows:" + str(gre_inc))
+        print("Decreased green rows:" + str(gre_dec))
+        print("Dices is:" + str(dices))
+        
         while pur_dec:
+            
             if not dices:
+                print("dices are empty")
                 return False
+            len_dices = len(dices)
             pur_cur = pur_dec.pop(0)
+            print("purple decreased is:" + str(pur_dec) )
             for inc in pur_inc:
                 for roll in dices:
                     if self.is_valid(pur_cur, inc, roll):
                         dices.remove(roll)
+                        print(str(roll) + " was removed from dices")
                         pur_inc.remove(inc)
+                        if inc < 24: # checks if the destination is not bar or bear off
+                            if copy1.state[inc] == 1: # if destination is a hit
+                                copy1.move(inc, 24) # move the green to the bar
+                                if inc in gre_dec and 24 in gre_inc:
+                                    gre_dec.remove(inc)
+                                    gre_inc.remove(24)
+                                else:
+                                    print("for single moves, there was no green moved with hit")
+                                    return False
+                        copy1.move(pur_cur, inc)
                         done = True
+                        print("Executed a move")
                         break
                 else:
                     continue
                 break
-            len_dices = len(dices)
             if not done and len_dices > 1:
-                if dice[0] != dice[1]:
-                    copy1 = copy.deepcopy(self)
+                if dice[0] != dice[1]: # If the dice is a normal roll
                     if copy1.is_valid(pur_cur, pur_cur - dices[0], dices[0]):
-                        copy1.move(pur_cur, pur_cur - dices[0])
-                        dices.remove(dices[0])
-                        if copy1.is_valid(pur)
-                    copy2 = copy.deepcopy(self)
-                    
-            elif not done and len_dices == 1:
+                        cur_pos = pur_cur - dices[0]
+                        copy2 = copy.deepcopy(copy1)
+                        if cur_pos < 24:
+                            if copy2.state[cur_pos] == 1:
+                                copy2.move(cur_pos, 24)
+                        copy2.move(pur_cur, cur_pos)
+                        nex_pos = cur_pos - dices[1]
+                        if copy2.is_valid(cur_pos, nex_pos, dices[1]) and ((nex_pos) in pur_inc):
+                            dices.remove(dices[1])
+                            dices.remove(dices[0])
+                            print("dices is :" + str(dices))
+                            pur_inc.remove(nex_pos)
+                            if cur_pos < 24:
+                                if copy1.state[cur_pos] == 1:
+                                    copy1.move(cur_pos, 24)
+                                    if cur_pos in gre_dec and 24 in gre_inc:
+                                        gre_dec.remove(cur_pos)
+                                        gre_inc.remove(24)
+                                    else:
+                                        print("In single dice roll there was no green moved with hit")
+                                        return False
+                            copy1.move(pur_cur, cur_pos)
+                            if (cur_pos - dice[0])  < 24:
+                                if copy1.state[cur_pos - dice[0]] == 1:
+                                    copy1.move(cur_pos - dice[0], 24)
+                                    if (cur_pos - dice[0]) in gre_dec and 24 in gre_inc:
+                                        gre_dec.remove(cur_pos - dice[0])
+                                        gre_inc.remove(24)
+                                    else:
+                                        print("In single dice roll there was no green moved with hit")
+                                        return False
+                            copy1.move(cur_pos, cur_pos - dice[0])
+                            done = True
+                            print("Done after updating: " + str(done))
+                            
+                    if copy1.is_valid(pur_cur, pur_cur - dices[1], dices[1]) and not done:
+                        cur_pos = pur_cur - dices[1]
+                        copy2 = copy.deepcopy(copy1)
+                        if cur_pos < 24:
+                            if copy2.state[cur_pos] == 1:
+                                copy2.move(cur_pos, 24)
+                        copy2.move(pur_cur, cur_pos)
+                        if copy2.is_valid(cur_pos, cur_pos - dices[0], dices[0]) and ((cur_pos - dices[0]) in pur_inc): # Change is valid 
+                            dices.remove(dices[1])
+                            dices.remove(dices[0])
+                            pur_inc.remove(cur_pos - dices[0])
+                            if cur_pos < 24:
+                                if copy1.state[cur_pos] == 1:
+                                    copy1.move(cur_pos, 24)
+                                    if cur_pos in gre_dec and 24 in gre_inc:
+                                        gre_dec.remove(cur_pos)
+                                        gre_inc.remove(24)
+                                    else:
+                                        print("In single dice role part 2 there was no green moved with hit")
+                                        return False
+                            copy1.move(pur_cur, cur_pos)
+                            if (cur_pos - dice[0]) < 24:
+                                if copy1.state[cur_pos - dice[0]] == 1:
+                                    copy1.move(cur_pos - dice[0], 24)
+                                    if (cur_pos - dice[0]) in gre_dec and 24 in gre_inc:
+                                        gre_dec.remove(cur_pos - dice[0])
+                                        gre_inc.remove(24)
+                                    else:
+                                        print("In single dice role part 2 there was no green moved with hit")
+                                        return False
+                            copy1.move(cur_pos, cur_pos - dice[0])
+                            done = True
+                            
+                else: # If the dice is a double roll
+                    if copy1.is_valid(pur_cur, pur_cur - dices[0], dices[0]):
+                        pos1 = pur_cur - dices[0]
+                        copy2 = copy.deepcopy(copy1)
+                        if pos1 < 24:
+                                if copy2.state[pos1] == 1:
+                                    copy2.move(pos1, 24)
+                        copy2.move(pur_cur, pos1)
+                        pos2 =  pos1 - dices[0]
+                        if copy2.is_valid(pos1, pos2, dices[0]):
+                            if pos2 < 24:
+                                if copy2.state[pos2] == 1:
+                                    copy2.move(pos2, 24)
+                            copy2.move(pos1, pos2)
+                            pos3 = pos2 - dices[0]
+                            if pos2 in pur_inc: # Registering a valid change in 2 of double rolls
+                                dices.remove(dices[0])
+                                dices.remove(dices[0])
+                                pur_inc.remove(pos2)
+                                if pos1 < 24:
+                                    if copy1.state[pos1] == 1:
+                                        copy1.move(pos1, 24)
+                                        if pos1 in gre_dec and 24 in gre_inc:
+                                            gre_dec.remove(pos1)
+                                            gre_inc.remove(24)
+                                        else:
+                                            print("In double dice move 2 repeats there was no green moved with hit")
+                                            return False
+                                copy1.move(pur_cur, pos1)
+                                if pos2 < 24:
+                                    if copy1.state[pos2] == 1:
+                                        copy1.move(pos2, 24)
+                                        if pos2 in gre_dec and 24 in gre_inc:
+                                            gre_dec.remove(pos2)
+                                            gre_inc.remove(24)
+                                        else:
+                                            print("In double dice move 2 repeats there was no green moved with hit")
+                                            return False
+                                copy1.move(pos1, pos2)
+                                done = True
+                                
+                            elif copy2.is_valid(pos2, pos3, dices[0]) and len_dices >2:
+                                if pos3 < 24:
+                                    if copy2.state[pos3] == 1:
+                                        copy2.move(pos3, 24)
+                                copy2.move(pos2, pos3)
+                                pos4 = pos3 - dices[0]
+                                if pos3 in pur_inc: # Registering a valid change in 3 of double rolls
+                                    dices.remove(dices[0]) # Remove dice 1
+                                    dices.remove(dices[0]) # Remove dice 2
+                                    dices.remove(dices[0]) # Remove dice 3
+                                    pur_inc.remove(pos3)
+                                    if pos1 < 24:
+                                        if copy1.state[pos1] == 1:
+                                            copy1.move(pos1, 24)
+                                            if pos1 in gre_dec and 24 in gre_inc:
+                                                gre_dec.remove(pos1)
+                                                gre_inc.remove(24)
+                                            else:
+                                                print("In double dice move 3 repeats there was no green moved with hit")
+                                                return False
+                                    copy1.move(pur_cur, pos1)
+                                    if pos2 < 24:
+                                        if copy1.state[pos2] == 1:
+                                            copy1.move(pos2, 24)
+                                            if pos2 in gre_dec and 24 in gre_inc:
+                                                gre_dec.remove(pos2)
+                                                gre_inc.remove(24)
+                                            else:
+                                                print("In double dice move 3 repeats there was no green moved with hit")
+                                                return False
+                                    copy1.move(pos1, pos2)
+                                    if pos3 < 24:
+                                        if copy1.state[pos3] == 1:
+                                            copy1.move(pos3, 24)
+                                            if pos3 in gre_dec and 24 in gre_inc:
+                                                gre_dec.remove(pos3)
+                                                gre_inc.remove(24)
+                                            else:
+                                                print("In double dice move 3 repeats there was no green moved with hit")
+                                                return False
+                                    copy1.move(pos2, pos3)
+                                    done = True
+                                    
+                                elif copy2.isValid(pos3, pos4, dices[0]) and len_dices == 4 and (pos4 in pur_inc): # Registering a change in 4 of double rolls
+                                    dices.remove(dices[0]) # Remove dice 1
+                                    dices.remove(dices[0]) # Remove dice 2
+                                    dices.remove(dices[0]) # Remove dice 3
+                                    dices.remove(dices[0]) # Remove dice 4
+                                    pur_inc.remove(pos4)
+                                    if pos1 < 24:
+                                        if copy1.state[pos1] == 1:
+                                            copy1.move(pos1, 24)
+                                            if cur_pos in pos1 and 24 in gre_inc:
+                                                gre_dec.remove(pos1)
+                                                gre_inc.remove(24)
+                                            else:
+                                                print("In double dice move 4 repeats there was no green moved with hit")
+                                                return False
+                                    copy1.move(pur_cur, pos1)
+                                    if pos2 < 24:
+                                        if copy1.state[pos2] == 1:
+                                            copy1.move(pos2, 24)
+                                            if pos2 in gre_dec and 24 in gre_inc:
+                                                gre_dec.remove(pos2)
+                                                gre_inc.remove(24)
+                                            else:
+                                                print("In double dice move 4 repeats there was no green moved with hit")
+                                                return False
+                                    copy1.move(pos1, pos2)
+                                    if pos3 < 24:
+                                        if copy1.state[pos3] == 1:
+                                            copy1.move(pos3, 24)
+                                            if pos3 in gre_dec and 24 in gre_inc:
+                                                gre_dec.remove(pos3)
+                                                gre_inc.remove(24)
+                                            else:
+                                                print("In double dice move 4 repeats there was no green moved with hit")
+                                                return False
+                                    copy1.move(pos2, pos3)
+                                    if pos4 < 24:
+                                        if copy1.state[pos4] == 1:
+                                            copy1.move(pos4, 24)
+                                            if pos4 in gre_dec and 24 in gre_inc:
+                                                gre_dec.remove(pos4)
+                                                gre_inc.remove(24)
+                                            else:
+                                                print("In double dice move 4 repeats there was no green moved with hit")
+                                                return False
+                                    copy1.move(pos3, pos4)
+                                    done = True    
+                                    
+            elif not done and len_dices == 1: # If the action from decreased purple row can not be done and the dice roll has a lenght of 1
+                print("error with move not getting executed and having a dice roll")
                 return False
-            
-                
-                
-             
-            
-            
+            done = False
+        if pur_inc or gre_dec or gre_inc:
+            print("moved green lists are not cleared")
+            return False  
         return True
         # combine two approaches: 
         # first, take the "new" state and figure out which rows have changed from

@@ -474,7 +474,7 @@ class DetectorNode(Node):
                                    [0,0], [0,0], [0,0], [0,0], [0,0], [0,0],
                                    [0,0], [0,0], [0,0], [0,0], [0,0], [0,0],
                                    [0,0], [0,0], [0,0], [0,0], [0,0], [0,0],
-                                   [0,0], [0, 0]])
+                                   [0,0], [0,0]])
         self.checker_locations = [[[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
                              [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
                              [[],[]], [[],[]], [[],[]], [[],[]], [[],[]], [[],[]],
@@ -486,11 +486,18 @@ class DetectorNode(Node):
         for green in self.green_beliefs:
             green = list(green)
             in_bucket = False
+            i = 0
             for bucket in self.board_buckets:
-                xmin = bucket[0] - 0.03
-                xmax = bucket[0] + 0.03
-                ymin = bucket[1] - 0.13
-                ymax = bucket[1] + 0.13
+                if i == 24:
+                    xmin = bucket[0] - 0.03
+                    xmax = bucket[0] + 0.03
+                    ymin = bucket[1] - 0.20
+                    ymax = bucket[1] + 0.20
+                else:
+                    xmin = bucket[0] - 0.03
+                    xmax = bucket[0] + 0.03
+                    ymin = bucket[1] - 0.13
+                    ymax = bucket[1] + 0.13
                 xg = green[0][0]
                 yg = green[0][1]
                 if ((xg >= xmin and xg <= xmax) and (yg >= ymin and yg <= ymax) and 
@@ -499,18 +506,25 @@ class DetectorNode(Node):
                     self.occupancy[bucket_ind][0] += 1
                     self.checker_locations[bucket_ind][0].append(green[0])
                     in_bucket = True
+                i += 1
             if not in_bucket:
                 self.checker_locations[25][0].append(green[0])
+                self.occupancy[25][0] += 1
         for brown in self.brown_beliefs:
             brown = list(brown)
             in_bucket = False
+            i = 0
             for bucket in self.board_buckets:
-                xmin = bucket[0] - 0.03
-                xmax = bucket[0] + 0.03
-                ymin = bucket[1] - 0.13
-                ymax = bucket[1] + 0.13
-                xb = green[0][0]
-                yb = green[0][1]
+                if i == 24:
+                    xmin = bucket[0] - 0.03
+                    xmax = bucket[0] + 0.03
+                    ymin = bucket[1] - 0.20
+                    ymax = bucket[1] + 0.20
+                else:
+                    xmin = bucket[0] - 0.03
+                    xmax = bucket[0] + 0.03
+                    ymin = bucket[1] - 0.13
+                    ymax = bucket[1] + 0.13
                 xb = brown[0][0]
                 yb = brown[0][1]
                 if ((xb >= xmin and xb <= xmax) and (yb >= ymin and yb <= ymax) and 
@@ -519,21 +533,26 @@ class DetectorNode(Node):
                     self.occupancy[bucket_ind][1] += 1
                     self.checker_locations[bucket_ind][1].append(brown[0])
                     in_bucket = True
+                i += 1
             if not in_bucket:
                 self.checker_locations[25][1].append(brown[0])
+                self.occupancy[25][1] += 1
 
         for triangle in range(25):
             if triangle <= 11:
                 self.checker_locations[triangle][0].sort(key=lambda x: x[1])
                 self.checker_locations[triangle][1].sort(key=lambda x: x[1])
 
-            elif triangle <=24:
+            elif triangle <24:
                 self.checker_locations[triangle][0].sort(key=lambda x: x[1], reverse=True)
                 self.checker_locations[triangle][1].sort(key=lambda x: x[1], reverse=True)
+            else:
+                self.checker_locations[triangle][0].sort(key=lambda x: x[1], reverse=True)
+                self.checker_locations[triangle][1].sort(key=lambda x: x[1])
         flattened_state_list = list(flatten_list(self.occupancy))
         flattened_checker_lst = list(flatten_list(self.checker_locations))
-
         if sum(flattened_state_list) == 30:
+            
             checker_msg = Float32MultiArray(data=(flattened_state_list+flattened_checker_lst))
             self.pub_checker_locations.publish(checker_msg)
 
@@ -597,15 +616,21 @@ class DetectorNode(Node):
         L = 150.0 # pixels
         W = 40.0 # pixels
         theta = -self.best_board_xy[2]
-
+        i = 0
         for row in self.board_buckets:              
             x = row[0]
             y = row[1]
             # same min/max used for grouping checkers into buckets
-            xmin = x - 0.03
-            xmax = x + 0.03
-            ymin = y - 0.13
-            ymax = y + 0.13
+            if i == 24:
+                xmin = x - 0.025
+                xmax = x + 0.025
+                ymin = y - 0.20
+                ymax = y + 0.20
+            else:
+                xmin = x - 0.03
+                xmax = x + 0.03
+                ymin = y - 0.13
+                ymax = y + 0.13
             uvtopleft = xyToUV(self.Minv,xmin,ymax)
             uvbottomright = xyToUV(self.Minv,xmax,ymin)
             #uv = xyToUV(self.Minv,x,y)
@@ -620,13 +645,13 @@ class DetectorNode(Node):
             xg = x - 0.03
             xb = x 
             if np.where(self.board_buckets == row)[0][0] < 12:
-                ygb = y + 0.13
+                ygb = y + 0.15
                 uvg = xyToUV(self.Minv,xg,ygb)
                 uvb = xyToUV(self.Minv,xb,ygb)
                 centergreen = tuple(np.int0(np.array([float(uvg[0]),float(uvg[1])])))
                 centerbrown = tuple(np.int0(np.array([float(uvb[0]),float(uvb[1])])))
             elif np.where(self.board_buckets == row)[0][0] < 24:
-                ygb = y - 0.13
+                ygb = y - 0.15
                 uvg = xyToUV(self.Minv,xg,ygb)
                 uvb = xyToUV(self.Minv,xb,ygb)
                 centergreen = tuple(np.int0(np.array([float(uvg[0]),float(uvg[1])])))
@@ -640,6 +665,7 @@ class DetectorNode(Node):
                 
             cv2.putText(self.rgb, str(checker_nums[0]),centergreen, font, fontScale=1,color=(0, 255, 0),thickness=2)
             cv2.putText(self.rgb, str(checker_nums[1]),centerbrown, font, fontScale=1,color=(0, 0, 255),thickness=2)
+            i += 1
                 
     def check_bucket(self, bucket):
         bucket_ind = np.where(self.board_buckets == bucket)[0][0]

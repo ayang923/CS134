@@ -162,16 +162,17 @@ class Render:
                   [BORDER_WIDTH + POINT_WIDTH * i + shift, BORDER_WIDTH]]
             pygame.draw.polygon(self.screen, color, v2)
 
-            if self.game.clicked is not None:
-                if i == self.game.clicked:
-                    pygame.draw.polygon(self.screen, YELLOW, v1, 4) 
-                if i == self.game.clicked - 12:
-                    pygame.draw.polygon(self.screen, YELLOW, v2, 4)
+            # if self.game.clicked is not None:
+            #     if i == self.game.clicked:
+            #         pygame.draw.polygon(self.screen, YELLOW, v1, 4) 
+            #     if i == self.game.clicked - 12:
+            #         pygame.draw.polygon(self.screen, YELLOW, v2, 4)
 
 class Game:
     def __init__(self, state):
         self.state = state
         self.bar = [0, 0]
+        self.state.append(self.bar)
         self.dice = [0, 0]
         self.turn = 1
         self.done = False
@@ -207,6 +208,7 @@ class Game:
                     self.state[point1] += 1
                 self.state[point2] = -1
                 self.bar[0] += 1
+        self.state[24] = self.bar
 
     def is_valid(self, point1, point2, die, tried = False):
         if point1 is None:
@@ -291,13 +293,13 @@ class Game:
     def num_checkers(self):
         if self.turn == 1:
             sum = self.bar[0]
-            for point in self.state:
+            for point in self.state[:24]:
                 if point > 0:
                     sum += point
             return sum
         if self.turn == -1:
             sum = self.bar[1]
-            for point in self.state:
+            for point in self.state[:24]:
                 if point < 0:
                     sum -= point
             return sum
@@ -359,11 +361,11 @@ class Game:
 #         game.clicked = None
 
 def choose_move(game, moves):
-    print("Legal moves: {}".format(moves))
+    # print("Legal moves: {}".format(moves))
     if moves:
         move = random.choice(moves)
         game.move(move[0], move[1])
-        print("Chosen move: {}".format(move))
+        # print("Chosen move: {}".format(move))
     else:
         if not game.num_checkers():
             print("GAME OVER! {} WINS!".format("White" if game.turn == 1 else "Black"))
