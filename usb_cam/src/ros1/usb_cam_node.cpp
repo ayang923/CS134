@@ -267,5 +267,6 @@ int main(int argc, char ** argv)
   ros::init(argc, argv, "usb_cam");
   usb_cam::UsbCamNode a;
   a.spin();
+  ros::shutdown(); // Initiating ROS node shutdown
   return EXIT_SUCCESS;
 }

@@ -1,12 +1,3 @@
-# TODO: make sure the wrist roll angle is always correct when going to pick/place
-# a checker and gives us minimal chance of missing.
-# TODO: (higher! priority) add a missed grab "detector" which re-tries grabbing the checker if it
-# missed the first time and the gripper closed all the way (based on joint angle)
-# TODO: (lower priority) finish fixing JointSplineTask N-R iteration
-    # Gunter recommended adding something to the algorithm which does not allow
-    # the solver to get outside our *known* bounds for the joint angles within the
-    # workspace
-
 from sixdof.utils.TrajectoryUtils import *
 from sixdof.utils.KinematicChain import *
 from sixdof.utils.TransformHelpers import *
@@ -20,7 +11,7 @@ import copy
 JOINT_NAMES = ['base', 'shoulder', 'elbow', 'wristpitch', 'wristroll', 'grip']
 
 BOARD_HEIGHT = 0.005
-GRIPPER_OFFSET = 0.12
+GRIPPER_OFFSET = 0.13
 
 J_EULER = np.array([[0, 1, -1, 1, 0],[0, 0, 0, 0, 1]]).reshape(2,5) # xdot4 = qdot4 / x4 = q4
 
@@ -60,7 +51,9 @@ class TaskObject():
         self.start_time = start_time
         self.done = False
         self.q0 = self.task_manager.q
+        self.qdot0 = self.task_manager.qdot
         self.p0 = self.task_manager.p
+        self.v0 = self.task_manager.v
         self.R0 = self.task_manager.R
 
     def evaluate(self, t, dt):
@@ -94,30 +87,34 @@ class InitTask(TaskObject):
         else:
             if (t < 5.0):
                 return goto5(t, 5.0, self.q0, self.SHOULDER_UP)
-            elif (t < 10.0):
-                return goto5(t-5, 5.0, self.SHOULDER_UP, self.ELBOW_UP)
+            elif (t < 8.0):
+                return goto5(t-5, 3.0, self.SHOULDER_UP, self.ELBOW_UP)
             else:
                 self.done = True
                 return self.task_manager.q, np.zeros((6, 1))
 
 class TaskSplineTask(TaskObject):
-    def __init__(self, start_time, task_manager, x_final=np.zeros((5, 1)), T=3.0, lam=20):
+    def __init__(self, start_time, task_manager, x_final=np.zeros((5, 1)), dir=0, T=3.0, lam=20):
         super().__init__(start_time, task_manager)
 
         self.q = self.q0[:5] # ignore gripper when computing taskspline
+        self.qdot = self.qdot0[:5]
         self.p0 = self.p0[:5] # ignore gripper when computing taskspline
-        self.pd = self.p0 
+        self.pd = self.p0
 
         # Pick the convergence bandwidth.
         self.lam = lam
 
         self.x_final = np.array(x_final).reshape(5,1)
         self.T = T
+        self.v0 = np.vstack((self.v0, np.array([0.0, 0.0]).reshape(-1,1)))
+        self.vf = np.array([0.0, 0.0, dir*0.05, 0.0, 0.0]).reshape(-1,1)
     
     def evaluate(self, t, dt):
         t = t - self.start_time - dt
         if t < self.T:
-            (pd, vd) = goto5(t, self.T, self.p0, self.x_final)
+            (pd, vd) = spline5(t, self.T, self.p0, self.x_final, self.v0, self.vf, np.zeros((5,1)).reshape(-1,1), np.zeros((5,1)).reshape(-1,1))
+            #(pd, vd) = goto5(t, self.T, self.p0, self.x_final)
 
             qlast = self.q
             pdlast = self.pd
@@ -138,13 +135,16 @@ class TaskSplineTask(TaskObject):
 
             qdot = J_inv@(vd + self.lam * e)
 
-            q = qlast + qdot*dt
+            q = qlast + self.qdot*dt
 
             self.q = np.array(q)
+            self.qdot = np.array(qdot)
             self.pd = pd
+            self.v = Jv @ self.qdot
+            self.Jv = Jv
 
         else:
-            q, qdot = np.array(self.q), np.zeros((5, 1))
+            q, qdot = np.array(self.q), np.array(self.qdot)
             self.done = True
 
         return np.vstack((q,self.q0[5])), np.vstack((qdot,np.zeros((1,1))))
@@ -161,9 +161,9 @@ class WiggleTask(TaskObject):
         self.lam = lam
 
         self.x_L = self.p0 + np.array([-0.008, 0, -0.005, 0, 0]).reshape(-1,1)
-        self.x_Lh = self.p0 + np.array([-0.008, 0, 0.00, 0, 0]).reshape(-1,1)
+        self.x_Lh = self.p0 + np.array([-0.008, 0, 0.002, 0, 0]).reshape(-1,1)
         self.x_R = self.p0 + np.array([0.008, 0, -0.005, 0, 0]).reshape(-1,1)
-        self.x_Rh = self.p0 + np.array([0.008, 0, 0.0, 0, 0]).reshape(-1,1)
+        self.x_Rh = self.p0 + np.array([0.008, 0, 0.002, 0, 0]).reshape(-1,1)
         self.x_F = self.p0 + np.array([0, 0, 0.0, 0, 0]).reshape(-1,1)
 
         self.T = T
@@ -216,17 +216,74 @@ class WiggleTask(TaskObject):
         return np.vstack((q,self.q0[5])), np.vstack((qdot,np.zeros((1,1))))
 
 class WaitTask(TaskObject):
-    def __init__(self, start_time, task_manager, T=3.0):
+    def __init__(self, start_time, task_manager, T=1.0):
         super().__init__(start_time, task_manager)
         self.T = T
+        self.q = self.q0
     
     def evaluate(self, t, dt):
         t = t - self.start_time - dt
         if t < self.T:
-            return self.q0, np.zeros((6, 1))
+            self.q = self.q + dt * self.qdot0
+            self.qdot = self.qdot0
+            return self.q, self.qdot0
         else:
             self.done = True
-            return self.q0, np.zeros((6, 1))
+            self.q = self.q + dt * self.qdot0
+            self.qdot = self.qdot0
+            return self.q, self.qdot0
+
+class WaitTask(TaskObject):
+    def __init__(self, start_time, task_manager, T=0.5, lam=20):
+        super().__init__(start_time, task_manager)      
+        self.q = self.q0[:5] # ignore gripper when computing taskspline
+        self.qdot = self.qdot0[:5]
+        self.p0 = self.p0[:5]
+        self.pd = self.p0
+        # Pick the convergence bandwidth.
+        self.lam = lam
+        self.T = T
+        self.v0 = np.vstack((self.v0, np.array([0.0, 0.0]).reshape(-1,1)))
+        self.vf = self.v0
+        self.x_final = self.p0 * self.v0 * self.T
+    
+    def evaluate(self, t, dt):
+        t = t - self.start_time - dt
+        if t < self.T:
+            (pd, vd) = spline5(t, self.T, self.p0, self.x_final, self.v0, self.vf, np.zeros((5,1)).reshape(-1,1), np.zeros((5,1)).reshape(-1,1))
+            #(pd, vd) = goto5(t, self.T, self.p0, self.x_final)
+
+            qlast = self.q
+            pdlast = self.pd
+
+            (p, _, Jv, _) = self.task_manager.chain.fkin(qlast)
+            e = ep(pdlast, np.vstack((p,alpha(qlast),beta(qlast))))
+            J = np.vstack((Jv, J_EULER))            
+
+            gamma = 0.1
+            U, S, V = np.linalg.svd(J)
+
+            msk = np.abs(S) >= gamma
+            S_inv = np.zeros(len(S))
+            S_inv[msk] = 1/S[msk]
+            S_inv[~msk] = S[~msk]/gamma**2
+
+            J_inv = V.T @ diagsvd(S_inv, *J.T.shape) @ U.T
+
+            qdot = J_inv@(vd + self.lam * e)
+
+            q = qlast + self.qdot*dt
+
+            self.q = np.array(q)
+            self.qdot = np.array(qdot)
+            self.pd = pd
+            self.v = Jv @ self.qdot
+
+        else:
+            q, qdot = np.array(self.q), np.array(self.qdot)
+            self.done = True
+
+        return np.vstack((q,self.q0[5])), np.vstack((qdot,np.zeros((1,1))))
   
 class JointSplineTask(TaskObject):
     def __init__(self, start_time, task_manager, x_final, T=3.0):
@@ -244,8 +301,8 @@ class JointSplineTask(TaskObject):
             qf = qf + np.linalg.solve(J, e)
 
         self.qdest = qf
-        self.task_manager.node.get_logger().info('previous (current) joint angles' + str(self.q0[:5]))
-        self.task_manager.node.get_logger().info('computed destination joint angles: ' + str(qf))
+        #self.task_manager.node.get_logger().info('previous (current) joint angles' + str(self.q0[:5]))
+        #self.task_manager.node.get_logger().info('computed destination joint angles: ' + str(qf))
     
     def evaluate(self, t, dt):
         t = t - self.start_time - dt
@@ -297,10 +354,12 @@ class TaskHandler():
         self.curr_task_object = None
 
         self.q = q0
+        self.qdot = np.zeros((6,1)).reshape(-1,1)
 
         self.chain = KinematicChain(node, 'world', 'tip', JOINT_NAMES[:5])
-        self.p, self.R, _, _ = self.chain.fkin(self.q[:5])
+        self.p, self.R, self.Jv, _ = self.chain.fkin(self.q[:5])
         self.p = np.vstack((self.p, alpha(self.q), beta(self.q), self.q[5]))
+        self.v = np.zeros((3,1)).reshape(-1,1)
 
         self.clearing = False
 
@@ -319,11 +378,12 @@ class TaskHandler():
         #    self.add_state(Tasks.INIT)
         
         # updates q and p
-        self.q, qdot = self.curr_task_object.evaluate(t, dt)
-        self.p, _, _, _ = self.chain.fkin(self.q[:5])
+        self.q, self.qdot = self.curr_task_object.evaluate(t, dt)
+        self.p, _, self.Jv, _ = self.chain.fkin(self.q[:5])
         self.p = np.vstack((self.p, alpha(self.q), beta(self.q), self.q[5]))
+        self.v = self.Jv @ self.qdot[:5]
 
-        return (self.q.flatten().tolist(), qdot.flatten().tolist())
+        return (self.q.flatten().tolist(), self.qdot.flatten().tolist())
 
 
     def set_state(self, task_type, t, **kwargs):
@@ -370,14 +430,17 @@ class TaskHandler():
         # FIXME Known Issue: ensuring the wrist is always parallel to
         # the long axis of the table for picking/placing is not working!
         # The last item appended to source pos and dest pos below
-        source_pos_xyz = np.vstack((source_pos + np.array([0.01, 0]).reshape(-1, 1), np.array([GRIPPER_OFFSET + BOARD_HEIGHT]).reshape(-1,1)))
-        source_pos_angles = np.array([-np.pi / 2, 0.2+float(np.arctan2(-(source_pos[0]-robotx), source_pos[1]-roboty))]).reshape(-1, 1)
+        source_pos_xyz = np.vstack((source_pos + np.array([0.01, 0.01]).reshape(-1, 1), np.array([GRIPPER_OFFSET + BOARD_HEIGHT]).reshape(-1,1)))
+        source_pos_angles = np.array([-np.pi / 2, 0.1+float(np.arctan2(-(source_pos[0]-robotx), source_pos[1]-roboty))]).reshape(-1, 1)
         source_pos = np.vstack((source_pos_xyz, source_pos_angles))
-        above_source_pos = source_pos+np.array([0, 0, 0.1, 0, 0]).reshape(-1, 1)
-        above_source_pos[4] = np.pi/2
+        above_source_pos = source_pos+np.array([0, 0, 0.075, 0, 0]).reshape(-1, 1)
+        if source_pos_xyz[1] < 0.4: # bottom part of board
+            y_offset_dir = 1
+        else:
+            y_offset_dir = -1
 
-        dest_pos_xyz = np.vstack((dest_pos, np.array([GRIPPER_OFFSET + 0.05 + BOARD_HEIGHT]).reshape(-1,1)))
-        dest_pos_angles = np.array([-np.pi / 2, 0.2+float(np.arctan2(-(dest_pos[0]-robotx), dest_pos[1]-roboty))]).reshape(-1, 1)
+        dest_pos_xyz = np.vstack((dest_pos, np.array([GRIPPER_OFFSET + 0.035 + BOARD_HEIGHT]).reshape(-1,1)))
+        dest_pos_angles = np.array([-np.pi / 2, 0.1+float(np.arctan2(-(dest_pos[0]-robotx), dest_pos[1]-roboty))]).reshape(-1, 1)
         dest_pos = np.vstack((dest_pos_xyz, dest_pos_angles))
         
         #self.node.get_logger().info("given source: " + str(source_pos))
@@ -386,26 +449,26 @@ class TaskHandler():
         # Queue Trajectories
         # Joint spline to 10cm above pick checker
         #self.add_state(Tasks.JOINT_SPLINE, x_final=above_source_pos, T=5)
-        self.add_state(Tasks.TASK_SPLINE, x_final=above_source_pos, T=5) # FIXME this is the buggy one
+        self.add_state(Tasks.TASK_SPLINE, x_final=above_source_pos, dir=-1, T=4) # FIXME this is the buggy one
         #self.add_state(Tasks.WAIT, T=20)
         # uncomment for debug
         #self.add_state(Tasks.TASK_SPLINE, x_final=above_source_pos, T=20)
         # Task spline to pick checker
-        self.add_state(Tasks.TASK_SPLINE, x_final=source_pos, T=2)
+        self.add_state(Tasks.TASK_SPLINE, x_final=source_pos, T=1.5)
         # wiggle
         #self.add_state(Tasks.WAIT, T=15)
-        self.add_state(Tasks.WIGGLE, T=2.0)
-        #self.add_state(Tasks.WIGGLE, T=3.0)
+        #self.add_state(Tasks.WIGGLE, T=2.0)
+        self.add_state(Tasks.WIGGLE, T=1.0)
         # Grip checker
         self.add_state(Tasks.GRIP, grip=True)
         # Task spline to pull up from checker
-        self.add_state(Tasks.TASK_SPLINE, x_final=source_pos+np.array([0, 0, 0.1, 0, 0]).reshape(-1, 1), T=2)
+        self.add_state(Tasks.TASK_SPLINE, x_final=above_source_pos+np.array([0, y_offset_dir*0.05, 0.0, 0, 0]).reshape(-1, 1), dir=1, T=2)
         self.add_state(Tasks.WAIT, T=0.5)
         # uncomment for debug
         #self.add_state(Tasks.TASK_SPLINE, x_final=above_source_pos, T=20)
         # Joint spline to destination
         #self.add_state(Tasks.JOINT_SPLINE, x_final=dest_pos, T=5)
-        self.add_state(Tasks.TASK_SPLINE, x_final=dest_pos, T=5)
+        self.add_state(Tasks.TASK_SPLINE, x_final=dest_pos, T=4)
         # uncomment for debug
         #self.add_state(Tasks.TASK_SPLINE, x_final=dest_pos, T=20)
         # Release checker

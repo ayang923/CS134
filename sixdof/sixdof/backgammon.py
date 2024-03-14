@@ -16,8 +16,8 @@ BUTTON_WIDTH = 80
 BUTTON_HEIGHT = 40
 
 # Colors
-WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
+WHITE = (128, 0, 128)
+BLACK = (0, 255, 0)
 TAN = (200, 160, 120)
 BROWN = (110, 80, 50)
 LIGHT_BROWN = (150, 130, 90)
@@ -51,9 +51,9 @@ class Render:
         self.screen.blit(text, text_rect)
 
         if self.game.turn > 0:
-            text = self.font.render('White\'s Turn', True, (255, 255, 255))
+            text = self.font.render('Robot\'s Turn', True, (0, 255, 0))
         else:
-            text = self.font.render('Black\'s Turn', True, (0, 0, 0))
+            text = self.font.render('Human\'s Turn', True, (128, 0, 128))
         text_rect = text.get_rect(center = (SCREEN_WIDTH / 2, BORDER_WIDTH / 2))
         self.screen.blit(text, text_rect)
     
@@ -112,7 +112,7 @@ class Render:
     def draw_checkers(self):
         point_pos = [SCREEN_WIDTH - BORDER_WIDTH + POINT_WIDTH / 2,
                      SCREEN_HEIGHT - BORDER_WIDTH - CHECKER_RAD]
-        for i, point in enumerate(self.game.state):
+        for i, point in enumerate(self.game.state[:24]):
             if i == 6:
                 point_pos[0] -= GAP_WIDTH
             if i == 12:
@@ -128,11 +128,11 @@ class Render:
                 pygame.draw.circle(self.screen, color, pos, CHECKER_RAD)
                 pygame.draw.circle(self.screen, border, pos, CHECKER_RAD, 2)
         
-        for i in range(self.game.bar[0]):
+        for i in range(self.game.state[24][0]):
             pos = (SCREEN_WIDTH / 2, SCREEN_HEIGHT - BORDER_WIDTH - (2 * i + 1) * CHECKER_RAD)
             pygame.draw.circle(self.screen, WHITE, pos, CHECKER_RAD)
             pygame.draw.circle(self.screen, BLACK, pos, CHECKER_RAD, 2)
-        for i in range(self.game.bar[1]):
+        for i in range(self.game.state[24][1]):
             pos = (SCREEN_WIDTH / 2, BORDER_WIDTH + (2 * i + 1) * CHECKER_RAD)
             pygame.draw.circle(self.screen, BLACK, pos, CHECKER_RAD)
             pygame.draw.circle(self.screen, WHITE, pos, CHECKER_RAD, 2)

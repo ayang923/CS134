@@ -72,7 +72,7 @@ def generate_launch_description():
                       {'pixel_format':        'yuyv2rgb'},
                       {'image_width':         960},
                       {'image_height':        720},
-                      {'framerate':           10.0},
+                      {'framerate':           15.0},
                       {'brightness':          -1},
                       {'contrast':            -1},
                       {'saturation':          -1},

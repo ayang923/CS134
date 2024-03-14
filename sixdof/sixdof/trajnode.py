@@ -65,7 +65,7 @@ class TrajectoryNode(Node):
         self.start_time = 1e-9 * self.get_clock().now().nanoseconds
 
         # every 5s, check to see if queue is empty and we need a new move
-        self.check_queue_timer = self.create_timer(3, self.check_queue)
+        self.check_queue_timer = self.create_timer(2, self.check_queue)
 
     def test(self, source_pos, dest_pos):
         self.task_handler.move_checker(source_pos, dest_pos)
@@ -76,7 +76,7 @@ class TrajectoryNode(Node):
         effort = list(fbkmsg.effort)
         #self.get_logger().info("gripper effort" + str(effort[5]))
         # self.get_logger().info("The angle of the gripper motor:" + str(self.actpos[5]))
-        if effort[5] > -1.4 and self.task_handler.curr_task_type == Tasks.WAIT:
+        if effort[5] > -1.50 and self.task_handler.curr_task_type == Tasks.WAIT:
             self.task_handler.clear()
 
 
